@@ -10,10 +10,20 @@ import dashboardRouter from './routes/dashboard.js';
 
 const app = express();
 const origins = (process.env.CLIENT_ORIGIN || 'http://localhost:5180').split(',').map((s) => s.trim());
-app.use(cors({ origin: (origin, callback) => {
-  if (!origin || origins.includes('*') || origins.includes(origin)) return callback(null, true);
+const isSameOrigin = (req, origin) => {
+  try {
+    return new URL(origin).host === (req.headers['x-forwarded-host'] || req.headers.host);
+  } catch {
+    return false;
+  }
+};
+app.use(cors((req, callback) => {
+  const origin = req.headers.origin;
+  if (!origin || origins.includes('*') || origins.includes(origin) || isSameOrigin(req, origin)) {
+    return callback(null, { origin: true });
+  }
   return callback(new Error('Origin is not allowed by CORS'));
-} }));
+}));
 app.use(express.json({ limit: '1mb' }));
 app.use(async (_req, _res, next) => {
   try { await loadData(); next(); } catch (error) { next(error); }

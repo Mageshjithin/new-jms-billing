@@ -29,18 +29,15 @@ The development Vite server proxies `/api` to the backend.
 
 ## Deploy manually with Vercel
 
-Deploy the backend and frontend as two Vercel projects so each has its own environment settings.
+The root `vercel.json` deploys the frontend and backend together as one Vercel project using Services:
 
-### Backend
+- `client` (Vite) serves every path except `/api/*`.
+- `server` (Express, entry `server/src/app.js`) handles `/api/*` on the same domain, so no `VITE_API_URL` or CORS setup is needed.
 
-- Import this GitHub repository and set **Root Directory** to `server`.
-- Add `CLIENT_ORIGIN` (the deployed frontend URL), `ADMIN_USERNAME`, a strong `ADMIN_PASSWORD`, a random `JWT_SECRET` of at least 32 characters, and optionally `INVOICE_PREFIX` in Project Settings → Environment Variables.
-- Deploy. The API is exposed through `server/api/index.js`.
+Steps:
 
-### Frontend
-
-- Import the same repository as a second Vercel project and set **Root Directory** to `client`.
-- Set `VITE_API_URL` to the backend URL plus `/api`, for example `https://your-api.vercel.app/api`.
+- Import this GitHub repository and keep **Root Directory** as the repository root.
+- Add `ADMIN_USERNAME`, a strong `ADMIN_PASSWORD`, a random `JWT_SECRET` of at least 32 characters, and optionally `INVOICE_PREFIX` in Project Settings → Environment Variables.
 - Deploy.
 
 **Note:** Vercel's serverless file system is temporary, so data saved by a backend deployed there will be lost. Run the backend on a machine with a persistent disk (for example the shop PC with `npm start`) if you rely on local storage. Never commit `.env` or credentials.
