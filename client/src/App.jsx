@@ -1,0 +1,195 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Activity, AlertTriangle, ArrowDownToLine, BarChart3, Check, ChevronDown, CircleDollarSign,
+  Clock3, FilePlus2, LayoutDashboard, LoaderCircle, Minus, Package, Plus, Printer,
+  QrCode, ReceiptText, Search, Shirt, ShoppingBag, Trash2, Wallet,
+} from 'lucide-react';
+
+const API = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '');
+const money = (n) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(Number(n || 0));
+const dateTime = (value) => new Date(value).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+
+async function request(path, options) {
+  const response = await fetch(`${API}${path}`, {
+    ...options,
+    headers: { 'Content-Type': 'application/json', ...(localStorage.getItem('jms_session') ? { Authorization: `Bearer ${localStorage.getItem('jms_session')}` } : {}), ...(options?.headers || {}) },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) { const error = new Error(data.message || `Request failed (${response.status})`); error.status = response.status; throw error; }
+  return data;
+}
+
+function App() {
+  const [page, setPage] = useState('Overview');
+  const [loggedIn, setLoggedIn] = useState(Boolean(localStorage.getItem('jms_session')));
+  const [summary, setSummary] = useState(null);
+  const [products, setProducts] = useState([]);
+  const [bills, setBills] = useState([]);
+  const [cart, setCart] = useState([]);
+  const [search, setSearch] = useState('');
+  const [barcode, setBarcode] = useState('');
+  const [customerName, setCustomerName] = useState('');
+  const [customerPhone, setCustomerPhone] = useState('');
+  const [discount, setDiscount] = useState('0');
+  const [gstPercent, setGstPercent] = useState('0');
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+  const [lastBill, setLastBill] = useState(null);
+  const [showProductForm, setShowProductForm] = useState(false);
+  const barcodeRef = useRef(null);
+  const [productForm, setProductForm] = useState({ name: '', sku: '', barcode: '', category: 'Saree', price: '', stock: '' });
+
+  const load = useCallback(async () => {
+    try {
+      const [p, b, d] = await Promise.all([request('/products'), request('/bills?limit=50'), request('/dashboard/summary')]);
+      setProducts(p.products || []); setBills(b.bills || []); setSummary(d.summary || {}); setError('');
+    } catch (e) { setError(e.message); if (e.status === 401) { localStorage.removeItem('jms_session'); setLoggedIn(false); } }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const subtotal = useMemo(() => cart.reduce((sum, row) => sum + row.price * row.quantity, 0), [cart]);
+  const safeDiscount = Math.min(Math.max(Number(discount) || 0, 0), subtotal);
+  const taxable = Math.max(0, subtotal - safeDiscount);
+  const tax = taxable * Math.max(0, Number(gstPercent) || 0) / 100;
+  const total = taxable + tax;
+  const filtered = useMemo(() => {
+    const value = search.trim().toLowerCase();
+    return products.filter((p) => !value || `${p.name} ${p.sku} ${p.barcode || ''} ${p.category}`.toLowerCase().includes(value));
+  }, [products, search]);
+
+  function addToCart(product) {
+    setError(''); setMessage('');
+    if (!product || product.stock < 1) { setError('This product is out of stock.'); return; }
+    setCart((current) => {
+      const found = current.find((x) => x._id === product._id);
+      if (found) {
+        if (found.quantity >= product.stock) { setError(`Only ${product.stock} in stock for ${product.name}.`); return current; }
+        return current.map((x) => x._id === product._id ? { ...x, quantity: x.quantity + 1 } : x);
+      }
+      return [...current, { ...product, quantity: 1, price: Number(product.price) }];
+    });
+  }
+
+  function scanBarcode(event) {
+    event.preventDefault();
+    const value = barcode.trim().toLowerCase();
+    if (!value) return;
+    const found = products.find((p) => p.barcode?.toLowerCase() === value || p.sku?.toLowerCase() === value);
+    if (!found) setError(`No product found for barcode or SKU “${barcode}”. Add it in Inventory first.`);
+    else addToCart(found);
+    setBarcode(''); barcodeRef.current?.focus();
+  }
+
+  function setQuantity(id, amount) {
+    setCart((current) => current.map((x) => x._id === id ? { ...x, quantity: Math.min(x.stock, Math.max(1, amount)) } : x));
+  }
+
+  async function saveBill() {
+    if (!cart.length) { setError('Scan or select products before saving the bill.'); return; }
+    setBusy(true); setError(''); setMessage('');
+    try {
+      const result = await request('/bills', { method: 'POST', body: JSON.stringify({
+        customerName: customerName || 'Walk-in customer', customerPhone, discount: safeDiscount,
+        gstPercent: Math.max(0, Number(gstPercent) || 0), items: cart.map((x) => ({ productId: x._id, quantity: x.quantity })),
+      }) });
+      setLastBill(result.bill); setCart([]); setCustomerName(''); setCustomerPhone(''); setDiscount('0');
+      setMessage(`Bill ${result.bill.invoiceNo} saved. Stock has been updated.`); await load();
+    } catch (e) { setError(e.message); await load(); }
+    finally { setBusy(false); }
+  }
+
+  async function createProduct(event) {
+    event.preventDefault(); setBusy(true); setError('');
+    try {
+      await request('/products', { method: 'POST', body: JSON.stringify({ ...productForm, price: Number(productForm.price), stock: Number(productForm.stock) }) });
+      setProductForm({ name: '', sku: '', barcode: '', category: 'Saree', price: '', stock: '' });
+      setShowProductForm(false); setMessage('Product added to inventory.'); await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(false); }
+  }
+
+  async function updateStock(product) {
+    const value = window.prompt(`Set available stock for ${product.name}:`, String(product.stock));
+    if (value === null) return;
+    if (!/^\d+$/.test(value)) { setError('Stock must be a whole number.'); return; }
+    try { await request(`/products/${product._id}`, { method: 'PATCH', body: JSON.stringify({ stock: Number(value) }) }); await load(); setMessage('Stock updated.'); }
+    catch (e) { setError(e.message); }
+  }
+
+  const today = new Date().toDateString();
+  if (!loggedIn) return <Login onLogin={() => { setLoggedIn(true); setError(''); }} />;
+  const todaysBills = bills.filter((b) => new Date(b.createdAt).toDateString() === today);
+
+  return <div className="app-shell">
+    <aside className="sidebar">
+      <div className="brand"><span className="brand-mark"><Shirt size={21}/></span><span><strong>JMS</strong><small>TEXTILES</small></span></div>
+      <div className="store-label">STORE MANAGEMENT</div>
+      <nav>{[
+        ['Overview', LayoutDashboard], ['New bill', ReceiptText], ['Inventory', Package], ['Sales history', BarChart3],
+      ].map(([label, Icon]) => <button key={label} className={`nav-item ${page === label ? 'active' : ''}`} onClick={() => setPage(label)}><Icon size={18}/><span>{label}</span>{label === 'New bill' && <span className="nav-dot"/>}</button>)}</nav>
+      <div className="sidebar-bottom"><div className="online-dot"/> <span>Billing system ready</span><span className="version">v1.0</span></div>
+    </aside>
+    <main className="main-area">
+      <header className="topbar"><div><div className="breadcrumb">JMS Textiles <span>/</span> {page}</div><h1>{page === 'New bill' ? 'Create a bill' : page}</h1></div><div className="top-actions"><span className="today-chip"><Clock3 size={15}/>{new Date().toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' })}</span><button className="avatar logout-button" title="Sign out" onClick={() => { localStorage.removeItem('jms_session'); setLoggedIn(false); setCart([]); }}>JM</button></div></header>
+      <div className="content">
+        {error && <div className="alert error"><AlertTriangle size={17}/>{error}<button onClick={() => setError('')}>×</button></div>}
+        {message && <div className="alert success"><Check size={17}/>{message}<button onClick={() => setMessage('')}>×</button></div>}
+        {page === 'Overview' && <>
+          <section className="welcome-row"><div><p className="eyebrow">YOUR SHOP AT A GLANCE</p><h2>Good day, JMS <span>✦</span></h2><p>Here’s what’s happening at your store today.</p></div><button className="primary" onClick={() => setPage('New bill')}><Plus size={17}/> Create new bill</button></section>
+          <div className="stats-grid">
+            <Stat icon={CircleDollarSign} label="Today's sales" value={money(summary?.todaySales)} note={`${summary?.todayBills || 0} bills today`} tone="plum"/>
+            <Stat icon={ReceiptText} label="Bills today" value={summary?.todayBills || 0} note="Successful checkouts" tone="peach"/>
+            <Stat icon={Package} label="Products in stock" value={summary?.productCount || 0} note="Active products" tone="sage"/>
+            <Stat icon={AlertTriangle} label="Low stock items" value={summary?.lowStock || 0} note="5 units or fewer" tone="gold"/>
+          </div>
+          <div className="overview-grid">
+            <section className="panel recent-panel"><div className="panel-heading"><div><h3>Recent bills</h3><p>Your latest customer checkouts</p></div><button className="text-button" onClick={() => setPage('Sales history')}>View all <ArrowDownToLine size={15}/></button></div><BillTable bills={bills.slice(0, 5)} onSelect={setLastBill}/></section>
+            <section className="panel quick-panel"><div className="panel-heading"><div><h3>Quick actions</h3><p>Common tasks, one click away</p></div></div><button className="quick-action" onClick={() => setPage('New bill')}><span className="quick-icon lavender"><FilePlus2 size={19}/></span><span><b>Start a new bill</b><small>Scan items and checkout</small></span><Plus size={17}/></button><button className="quick-action" onClick={() => { setPage('Inventory'); setShowProductForm(true); }}><span className="quick-icon softgreen"><Package size={19}/></span><span><b>Add a product</b><small>Update your store catalogue</small></span><Plus size={17}/></button><div className="quick-note"><Activity size={17}/><span>Sales and stock update as soon as a bill is saved.</span></div></section>
+          </div>
+          <section className="panel lowstock-panel"><div className="panel-heading"><div><h3>Stock to watch</h3><p>Products at 5 units or fewer</p></div><button className="text-button" onClick={() => setPage('Inventory')}>Inventory <ChevronDown size={15}/></button></div><LowStock products={products.filter((p) => p.stock <= 5).slice(0, 5)}/></section>
+        </>}
+
+        {page === 'New bill' && <div className="billing-layout">
+          <section className="panel bill-left"><div className="panel-heading"><div><h3>Items</h3><p>Scan a barcode or find a product</p></div><span className="soft-count">{cart.reduce((a, b) => a + b.quantity, 0)} items</span></div>
+            <form className="scan-box" onSubmit={scanBarcode}><QrCode size={19}/><input ref={barcodeRef} value={barcode} onChange={(e) => setBarcode(e.target.value)} placeholder="Scan barcode or enter SKU, then press Enter" autoFocus/><button type="submit">Add</button></form>
+            <div className="search-field"><Search size={17}/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search product name, SKU or barcode"/></div>
+            <div className="product-picker">{filtered.slice(0, 12).map((p) => <button className="picker-row" key={p._id} onClick={() => addToCart(p)} disabled={!p.stock}><span className="fabric-swatch">{p.name.slice(0, 1).toUpperCase()}</span><span className="picker-name"><b>{p.name}</b><small>{p.sku} · {p.category}</small></span><span className="picker-price"><b>{money(p.price)}</b><small>{p.stock} in stock</small></span><Plus size={17}/></button>)}{!filtered.length && <div className="empty-state">No matching products. Add them from Inventory.</div>}</div>
+            <div className="cart-heading"><h3>Bill items</h3><button className="text-button" onClick={() => setCart([])} disabled={!cart.length}><Trash2 size={14}/> Clear</button></div>
+            <div className="cart-list">{cart.map((item) => <div className="cart-row" key={item._id}><span className="fabric-swatch small">{item.name.slice(0, 1).toUpperCase()}</span><span className="cart-name"><b>{item.name}</b><small>{money(item.price)} each</small></span><div className="qty-control"><button onClick={() => setQuantity(item._id, item.quantity - 1)}><Minus size={13}/></button><span>{item.quantity}</span><button onClick={() => setQuantity(item._id, item.quantity + 1)}><Plus size={13}/></button></div><b className="line-total">{money(item.price * item.quantity)}</b><button className="icon-button remove" onClick={() => setCart((c) => c.filter((x) => x._id !== item._id))}><Trash2 size={16}/></button></div>)}{!cart.length && <div className="empty-cart"><ShoppingBag size={23}/><b>No items yet</b><span>Scan a product barcode or select one above.</span></div>}</div>
+          </section>
+          <aside className="panel checkout-panel"><div className="checkout-title"><div><p className="eyebrow">CHECKOUT</p><h3>Bill summary</h3></div><ReceiptText size={20}/></div>
+            <label className="field-label">Customer name <span>OPTIONAL</span><input value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="Walk-in customer"/></label>
+            <label className="field-label">Phone number <span>OPTIONAL</span><input value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} placeholder="Customer phone" inputMode="tel"/></label>
+            <div className="summary-lines"><div><span>Subtotal</span><b>{money(subtotal)}</b></div><div className="discount-line"><label>Discount <span>(₹)</span></label><input type="number" min="0" max={subtotal} value={discount} onChange={(e) => setDiscount(e.target.value)} /></div><div className="discount-line"><label>GST <span>(%)</span></label><input type="number" min="0" max="100" value={gstPercent} onChange={(e) => setGstPercent(e.target.value)} /></div><div><span>Tax</span><b>{money(tax)}</b></div></div>
+            <div className="total-row"><span>Total payable</span><strong>{money(total)}</strong></div><button className="primary save-bill" onClick={saveBill} disabled={busy || !cart.length}>{busy ? <LoaderCircle className="spin" size={18}/> : <Check size={18}/>} {busy ? 'Saving bill…' : 'Save bill'}</button><p className="checkout-foot"><Check size={14}/> Stock will update after this bill is saved</p>
+          </aside>
+        </div>}
+
+        {page === 'Inventory' && <section className="panel inventory-panel"><div className="panel-heading"><div><h3>Product inventory</h3><p>Manage products, barcodes, prices and available stock</p></div><button className="primary" onClick={() => setShowProductForm((x) => !x)}><Plus size={17}/> Add product</button></div>{showProductForm && <form className="product-form" onSubmit={createProduct}><div className="form-grid"><Field label="Product name" value={productForm.name} onChange={(v) => setProductForm({ ...productForm, name: v })} required/><Field label="SKU" value={productForm.sku} onChange={(v) => setProductForm({ ...productForm, sku: v })} required/><Field label="Barcode / QR value" value={productForm.barcode} onChange={(v) => setProductForm({ ...productForm, barcode: v })}/><Field label="Category" value={productForm.category} onChange={(v) => setProductForm({ ...productForm, category: v })}/><Field label="Selling price (₹)" value={productForm.price} onChange={(v) => setProductForm({ ...productForm, price: v })} type="number" required/><Field label="Opening stock" value={productForm.stock} onChange={(v) => setProductForm({ ...productForm, stock: v })} type="number" required/></div><div className="form-actions"><button type="button" className="secondary" onClick={() => setShowProductForm(false)}>Cancel</button><button className="primary" disabled={busy}>{busy ? 'Saving…' : 'Save product'}</button></div></form>}<div className="table-wrap"><table><thead><tr><th>PRODUCT</th><th>SKU / BARCODE</th><th>CATEGORY</th><th>PRICE</th><th>STOCK</th><th></th></tr></thead><tbody>{products.map((p) => <tr key={p._id}><td><div className="product-cell"><span className="fabric-swatch small">{p.name.slice(0, 1).toUpperCase()}</span><b>{p.name}</b></div></td><td>{p.sku}<small className="table-sub">{p.barcode || 'No barcode'}</small></td><td>{p.category}</td><td><b>{money(p.price)}</b></td><td><span className={`stock-badge ${p.stock <= 5 ? 'low' : ''}`}>{p.stock} {p.stock <= 5 && <AlertTriangle size={12}/>}</span></td><td><button className="secondary small-button" onClick={() => updateStock(p)}>Update stock</button></td></tr>)}</tbody></table>{!products.length && <div className="empty-state">No products yet. Add your first product to get started.</div>}</div></section>}
+
+        {page === 'Sales history' && <section className="panel inventory-panel"><div className="panel-heading"><div><h3>Sales history</h3><p>Recent bills and checkout details</p></div><span className="soft-count">{bills.length} bills loaded</span></div><BillTable bills={bills} onSelect={setLastBill}/></section>}
+      </div>
+    </main>
+    {lastBill && <div className="modal-backdrop" onClick={() => setLastBill(null)}><div className="invoice-modal" onClick={(e) => e.stopPropagation()}><div className="invoice-actions"><span className="soft-count">Saved bill</span><button className="secondary" onClick={() => window.print()}><Printer size={16}/> Print receipt</button><button className="icon-button" onClick={() => setLastBill(null)}>×</button></div><Invoice bill={lastBill}/></div></div>}
+  </div>;
+}
+
+function Login({ onLogin }) {
+  const [username, setUsername] = useState(''); const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false); const [error, setError] = useState('');
+  async function submit(event) {
+    event.preventDefault(); setBusy(true); setError('');
+    try { const result = await request('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }); localStorage.setItem('jms_session', result.token); onLogin(); }
+    catch (e) { setError(e.message); } finally { setBusy(false); }
+  }
+  return <div className="login-screen"><form className="login-card" onSubmit={submit}><div className="brand login-brand"><span className="brand-mark"><Shirt size={21}/></span><span><strong>JMS</strong><small>TEXTILES</small></span></div><p className="eyebrow">STORE MANAGEMENT</p><h1>Welcome back</h1><p className="login-description">Sign in to manage billing and stock.</p>{error && <div className="alert error">{error}</div>}<label className="field-label">Username<input autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} required /></label><label className="field-label">Password<input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required /></label><button className="primary login-submit" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button><small className="login-hint">Admin credentials are configured in your server environment.</small></form></div>;
+}
+
+function Field({ label, value, onChange, type = 'text', required }) { return <label className="field-label">{label}<input type={type} required={required} min={type === 'number' ? '0' : undefined} step={type === 'number' && label.includes('price') ? '0.01' : type === 'number' ? '1' : undefined} value={value} onChange={(e) => onChange(e.target.value)} /></label>; }
+function Stat({ icon: Icon, label, value, note, tone }) { return <div className="stat-card"><span className={`stat-icon ${tone}`}><Icon size={20}/></span><span className="stat-label">{label}</span><strong>{value}</strong><small>{note}</small></div>; }
+function BillTable({ bills, onSelect }) { return <div className="table-wrap"><table><thead><tr><th>INVOICE</th><th>CUSTOMER</th><th>ITEMS</th><th>DATE & TIME</th><th>AMOUNT</th><th>STATUS</th></tr></thead><tbody>{bills.map((b) => <tr key={b._id} className="click-row" onClick={() => onSelect(b)}><td><b className="invoice-link">{b.invoiceNo}</b></td><td>{b.customerName || 'Walk-in customer'}</td><td>{b.items?.reduce((n, item) => n + item.quantity, 0) || 0}</td><td>{dateTime(b.createdAt)}</td><td><b>{money(b.total)}</b></td><td><span className="paid-pill"><span/>Paid</span></td></tr>)}</tbody></table>{!bills.length && <div className="empty-state"><ReceiptText size={22}/>No bills saved yet.</div>}</div>; }
+function LowStock({ products }) { return <div className="lowstock-list">{products.map((p) => <div className="lowstock-row" key={p._id}><span className="fabric-swatch small">{p.name.slice(0,1)}</span><b>{p.name}</b><small>{p.sku}</small><span className="stock-badge low">{p.stock} left</span></div>)}{!products.length && <div className="empty-state">Stock levels look good. No low-stock items.</div>}</div>; }
+function Invoice({ bill }) { return <div className="invoice-paper"><div className="invoice-brand"><span className="brand-mark"><Shirt size={20}/></span><div><h2>JMS Textiles</h2><p>SALES INVOICE</p></div></div><div className="invoice-meta"><div><small>INVOICE NUMBER</small><b>{bill.invoiceNo}</b></div><div><small>DATE</small><b>{dateTime(bill.createdAt)}</b></div><div><small>CUSTOMER</small><b>{bill.customerName || 'Walk-in customer'}</b>{bill.customerPhone && <span>{bill.customerPhone}</span>}</div></div><table className="invoice-items"><thead><tr><th>ITEM</th><th>QTY</th><th>PRICE</th><th>AMOUNT</th></tr></thead><tbody>{bill.items?.map((item, i) => <tr key={i}><td>{item.name}<small>{item.sku}</small></td><td>{item.quantity}</td><td>{money(item.unitPrice)}</td><td>{money(item.lineTotal)}</td></tr>)}</tbody></table><div className="invoice-totals"><div><span>Subtotal</span><b>{money(bill.subtotal)}</b></div>{bill.discount > 0 && <div><span>Discount</span><b>− {money(bill.discount)}</b></div>}{bill.gstPercent > 0 && <div><span>GST ({bill.gstPercent}%)</span><b>{money(bill.tax)}</b></div>}<div className="invoice-grand"><span>Total paid</span><b>{money(bill.total)}</b></div></div><p className="thankyou">Thank you for shopping with JMS Textiles</p></div>; }
+
+export default App;
