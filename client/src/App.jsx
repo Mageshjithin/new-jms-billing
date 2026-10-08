@@ -4,6 +4,7 @@ import {
   Clock3, FilePlus2, LayoutDashboard, LoaderCircle, Minus, Package, Plus, Printer,
   QrCode, ReceiptText, Search, Shirt, ShoppingBag, Trash2, Wallet,
 } from 'lucide-react';
+import { QrImage, QrLabel, STOCK_PRESETS, nextSku } from './QrLabel.jsx';
 
 const API = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '');
 const money = (n) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(Number(n || 0));
@@ -37,6 +38,7 @@ function App() {
   const [error, setError] = useState('');
   const [lastBill, setLastBill] = useState(null);
   const [showProductForm, setShowProductForm] = useState(false);
+  const [qrProduct, setQrProduct] = useState(null);
   const barcodeRef = useRef(null);
   const [productForm, setProductForm] = useState({ name: '', sku: '', barcode: '', category: 'Saree', price: '', stock: '' });
 
@@ -102,11 +104,22 @@ function App() {
   async function createProduct(event) {
     event.preventDefault(); setBusy(true); setError('');
     try {
-      await request('/products', { method: 'POST', body: JSON.stringify({ ...productForm, price: Number(productForm.price), stock: Number(productForm.stock) }) });
+      const qrValue = productForm.barcode.trim() || productForm.sku.trim().toUpperCase();
+      const { product } = await request('/products', { method: 'POST', body: JSON.stringify({ ...productForm, barcode: qrValue, price: Number(productForm.price), stock: Number(productForm.stock) }) });
       setProductForm({ name: '', sku: '', barcode: '', category: 'Saree', price: '', stock: '' });
-      setShowProductForm(false); setMessage('Product added to inventory.'); await load();
+      setShowProductForm(false); setMessage('Product added to inventory. Print its QR label below.'); setQrProduct(product); await load();
     } catch (e) { setError(e.message); }
     finally { setBusy(false); }
+  }
+
+  function applyPreset(preset) {
+    const sku = nextSku(preset.code, products);
+    setProductForm((f) => ({ ...f, name: preset.name, category: preset.category, sku, barcode: sku }));
+  }
+
+  function generateSku() {
+    const sku = nextSku(productForm.category || productForm.name, products);
+    setProductForm((f) => ({ ...f, sku, barcode: sku }));
   }
 
   async function updateStock(product) {
@@ -166,11 +179,12 @@ function App() {
           </aside>
         </div>}
 
-        {page === 'Inventory' && <section className="panel inventory-panel"><div className="panel-heading"><div><h3>Product inventory</h3><p>Manage products, barcodes, prices and available stock</p></div><button className="primary" onClick={() => setShowProductForm((x) => !x)}><Plus size={17}/> Add product</button></div>{showProductForm && <form className="product-form" onSubmit={createProduct}><div className="form-grid"><Field label="Product name" value={productForm.name} onChange={(v) => setProductForm({ ...productForm, name: v })} required/><Field label="SKU" value={productForm.sku} onChange={(v) => setProductForm({ ...productForm, sku: v })} required/><Field label="Barcode / QR value" value={productForm.barcode} onChange={(v) => setProductForm({ ...productForm, barcode: v })}/><Field label="Category" value={productForm.category} onChange={(v) => setProductForm({ ...productForm, category: v })}/><Field label="Selling price (₹)" value={productForm.price} onChange={(v) => setProductForm({ ...productForm, price: v })} type="number" required/><Field label="Opening stock" value={productForm.stock} onChange={(v) => setProductForm({ ...productForm, stock: v })} type="number" required/></div><div className="form-actions"><button type="button" className="secondary" onClick={() => setShowProductForm(false)}>Cancel</button><button className="primary" disabled={busy}>{busy ? 'Saving…' : 'Save product'}</button></div></form>}<div className="table-wrap"><table><thead><tr><th>PRODUCT</th><th>SKU / BARCODE</th><th>CATEGORY</th><th>PRICE</th><th>STOCK</th><th></th></tr></thead><tbody>{products.map((p) => <tr key={p._id}><td><div className="product-cell"><span className="fabric-swatch small">{p.name.slice(0, 1).toUpperCase()}</span><b>{p.name}</b></div></td><td>{p.sku}<small className="table-sub">{p.barcode || 'No barcode'}</small></td><td>{p.category}</td><td><b>{money(p.price)}</b></td><td><span className={`stock-badge ${p.stock <= 5 ? 'low' : ''}`}>{p.stock} {p.stock <= 5 && <AlertTriangle size={12}/>}</span></td><td><button className="secondary small-button" onClick={() => updateStock(p)}>Update stock</button></td></tr>)}</tbody></table>{!products.length && <div className="empty-state">No products yet. Add your first product to get started.</div>}</div></section>}
+        {page === 'Inventory' && <section className="panel inventory-panel"><div className="panel-heading"><div><h3>Product inventory</h3><p>Manage products, barcodes, prices and available stock</p></div><button className="primary" onClick={() => setShowProductForm((x) => !x)}><Plus size={17}/> Add product</button></div>{showProductForm && <form className="product-form" onSubmit={createProduct}><div className="preset-block"><span className="eyebrow">QUICK PICK STOCK NAME</span><div className="preset-list">{STOCK_PRESETS.map((preset) => <button type="button" key={preset.name} className={`preset-chip ${productForm.name === preset.name ? 'active' : ''}`} onClick={() => applyPreset(preset)}>{preset.name}</button>)}</div></div><div className="product-form-body"><div className="form-grid"><Field label="Product name" value={productForm.name} onChange={(v) => setProductForm({ ...productForm, name: v })} required/><Field label="SKU" value={productForm.sku} onChange={(v) => setProductForm({ ...productForm, sku: v })} required/><Field label="Barcode / QR value" value={productForm.barcode} onChange={(v) => setProductForm({ ...productForm, barcode: v })}/><Field label="Category" value={productForm.category} onChange={(v) => setProductForm({ ...productForm, category: v })}/><Field label="Selling price (₹)" value={productForm.price} onChange={(v) => setProductForm({ ...productForm, price: v })} type="number" required/><Field label="Opening stock" value={productForm.stock} onChange={(v) => setProductForm({ ...productForm, stock: v })} type="number" required/></div><div className="qr-preview"><QrImage value={productForm.barcode.trim() || productForm.sku.trim().toUpperCase()} size={120}/><small>{productForm.barcode.trim() || productForm.sku.trim().toUpperCase() || 'Pick a stock name or enter SKU'}</small></div></div><div className="form-actions"><button type="button" className="secondary" onClick={generateSku}><QrCode size={15}/> Auto SKU & QR</button><button type="button" className="secondary" onClick={() => setShowProductForm(false)}>Cancel</button><button className="primary" disabled={busy}>{busy ? 'Saving…' : 'Save product'}</button></div></form>}<div className="table-wrap"><table><thead><tr><th>PRODUCT</th><th>SKU / BARCODE</th><th>CATEGORY</th><th>PRICE</th><th>STOCK</th><th></th></tr></thead><tbody>{products.map((p) => <tr key={p._id}><td><div className="product-cell"><span className="fabric-swatch small">{p.name.slice(0, 1).toUpperCase()}</span><b>{p.name}</b></div></td><td>{p.sku}<small className="table-sub">{p.barcode || 'No barcode'}</small></td><td>{p.category}</td><td><b>{money(p.price)}</b></td><td><span className={`stock-badge ${p.stock <= 5 ? 'low' : ''}`}>{p.stock} {p.stock <= 5 && <AlertTriangle size={12}/>}</span></td><td><div className="row-actions"><button className="secondary small-button" onClick={() => setQrProduct(p)} aria-label={`Show QR label for ${p.name}`}><QrCode size={14}/> QR</button><button className="secondary small-button" onClick={() => updateStock(p)}>Update stock</button></div></td></tr>)}</tbody></table>{!products.length && <div className="empty-state">No products yet. Add your first product to get started.</div>}</div></section>}
 
         {page === 'Sales history' && <section className="panel inventory-panel"><div className="panel-heading"><div><h3>Sales history</h3><p>Recent bills and checkout details</p></div><span className="soft-count">{bills.length} bills loaded</span></div><BillTable bills={bills} onSelect={setLastBill}/></section>}
       </div>
     </main>
+    {qrProduct && <div className="modal-backdrop" onClick={() => setQrProduct(null)}><div className="invoice-modal qr-modal" onClick={(e) => e.stopPropagation()}><div className="invoice-actions"><span className="soft-count">QR label</span><button className="secondary" onClick={() => window.print()}><Printer size={16}/> Print label</button><button className="icon-button" onClick={() => setQrProduct(null)} aria-label="Close">×</button></div><QrLabel product={qrProduct} money={money}/></div></div>}
     {lastBill && <div className="modal-backdrop" onClick={() => setLastBill(null)}><div className="invoice-modal" onClick={(e) => e.stopPropagation()}><div className="invoice-actions"><span className="soft-count">Saved bill</span><button className="secondary" onClick={() => window.print()}><Printer size={16}/> Print receipt</button><button className="icon-button" onClick={() => setLastBill(null)}>×</button></div><Invoice bill={lastBill}/></div></div>}
   </div>;
 }
