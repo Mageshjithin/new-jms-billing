@@ -31,8 +31,8 @@ app.use(async (_req, _res, next) => {
 app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'jms-textiles-billing-api' }));
 app.post('/api/auth/login', (req, res) => {
   const { username = '', password = '' } = req.body || {};
-  const expectedUser = process.env.ADMIN_USERNAME || '';
-  const expectedPass = process.env.ADMIN_PASSWORD || '';
+  const expectedUser = process.env.ADMIN_USERNAME || 'Admin';
+  const expectedPass = process.env.ADMIN_PASSWORD || 'Admin123';
   const secret = process.env.JWT_SECRET || '';
   const safeEqual = (a, b) => {
     const left = Buffer.from(String(a)); const right = Buffer.from(String(b));
