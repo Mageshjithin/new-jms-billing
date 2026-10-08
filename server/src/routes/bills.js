@@ -47,9 +47,12 @@ router.post('/', async (req, res, next) => {
       }
       const tax = money((subtotal - discount) * gstPercent / 100);
       const prefix = (process.env.INVOICE_PREFIX || 'JMS').replace(/[^A-Za-z0-9-]/g, '').slice(0, 10);
+      // Sequence runs 1..100000, then wraps back to 1. Incremented inside the locked transaction, so no duplicates.
+      const sequence = (Number(data.invoiceCounter) || 0) >= 100000 ? 1 : (Number(data.invoiceCounter) || 0) + 1;
+      data.invoiceCounter = sequence;
       const bill = {
         _id: randomUUID(),
-        invoiceNo: `${prefix}-${now.slice(0, 10).replaceAll('-', '')}-${Date.now().toString().slice(-6)}`,
+        invoiceNo: `${prefix}-${now.slice(0, 10).replaceAll('-', '')}-${sequence}`,
         customerName: String(req.body.customerName || 'Walk-in customer').trim().slice(0, 100),
         customerPhone: String(req.body.customerPhone || '').trim().slice(0, 20),
         items,
