@@ -1,51 +1,60 @@
 import { promises as fs } from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import pg from 'pg';
 
-// All data lives in one JSON file on the local disk (server/data/db.json by default).
-const defaultFile = fileURLToPath(new URL('../data/db.json', import.meta.url));
-const dataFile = () => path.resolve(process.env.DATA_FILE || defaultFile);
+// Data lives in Neon Postgres as a single JSON document (products + bills).
+// Deployed Vercel functions have a read-only filesystem, so local files cannot be used.
 const empty = () => ({ products: [], bills: [] });
+const seedFile = new URL('../data/db.json', import.meta.url);
 
-let cache;
-let loading;
-let queue = Promise.resolve();
+let pool;
+const getPool = () => {
+  if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is not set. Connect the Neon integration.');
+  pool ??= new pg.Pool({ connectionString: process.env.DATABASE_URL, max: 5, ssl: { rejectUnauthorized: false } });
+  return pool;
+};
+
+let ready;
+function ensureSchema() {
+  ready ??= (async () => {
+    const db = getPool();
+    await db.query('CREATE TABLE IF NOT EXISTS app_data (id INT PRIMARY KEY, data JSONB NOT NULL)');
+    let seed = empty();
+    try {
+      seed = { ...seed, ...JSON.parse(await fs.readFile(seedFile, 'utf8')) };
+    } catch {
+      // No local seed file available (e.g. in production); start empty.
+    }
+    await db.query('INSERT INTO app_data (id, data) VALUES (1, $1) ON CONFLICT (id) DO NOTHING', [JSON.stringify(seed)]);
+  })().catch((error) => { ready = undefined; throw error; });
+  return ready;
+}
 
 // Returns the current data. Callers must treat it as read-only; use transaction() to change it.
 export async function loadData() {
-  if (cache) return cache;
-  loading ??= (async () => {
-    try {
-      cache = { ...empty(), ...JSON.parse(await fs.readFile(dataFile(), 'utf8')) };
-    } catch (error) {
-      if (error.code !== 'ENOENT') throw new Error(`Could not read data file ${dataFile()}: ${error.message}`);
-      cache = empty();
-    }
-    return cache;
-  })().finally(() => { loading = undefined; });
-  return loading;
+  await ensureSchema();
+  const { rows } = await getPool().query('SELECT data FROM app_data WHERE id = 1');
+  return { ...empty(), ...rows[0]?.data };
 }
 
-async function save(data) {
-  const file = dataFile();
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.${process.pid}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(data, null, 2));
-  await fs.rename(tmp, file);
-}
-
-// Runs fn against a copy of the data, one transaction at a time. If fn throws,
-// nothing is saved, so partial changes (e.g. stock already reduced) are discarded.
-export function transaction(fn) {
-  const run = queue.then(async () => {
-    const draft = structuredClone(await loadData());
+// Runs fn against the data inside a locked Postgres transaction. If fn throws,
+// the transaction rolls back, so partial changes (e.g. stock already reduced) are discarded.
+export async function transaction(fn) {
+  await ensureSchema();
+  const client = await getPool().connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query('SELECT data FROM app_data WHERE id = 1 FOR UPDATE');
+    const draft = { ...empty(), ...rows[0]?.data };
     const result = await fn(draft);
-    await save(draft);
-    cache = draft;
+    await client.query('UPDATE app_data SET data = $1 WHERE id = 1', [JSON.stringify(draft)]);
+    await client.query('COMMIT');
     return result;
-  });
-  queue = run.catch(() => {});
-  return run;
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export const httpError = (status, message) => Object.assign(new Error(message), { status });
