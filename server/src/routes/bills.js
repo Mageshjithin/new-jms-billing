@@ -47,9 +47,18 @@ router.post('/', async (req, res, next) => {
       }
       const tax = money((subtotal - discount) * gstPercent / 100);
       const prefix = (process.env.INVOICE_PREFIX || 'JMS').replace(/[^A-Za-z0-9-]/g, '').slice(0, 10);
+      let invoiceSequence = Number.isSafeInteger(data.invoiceSequence) && data.invoiceSequence >= 0
+        ? data.invoiceSequence + 1
+        : 1;
+      let invoiceNo = `${prefix}-${now.slice(0, 10).replaceAll('-', '')}-${invoiceSequence}`;
+      while (data.bills.some((existing) => existing.invoiceNo === invoiceNo)) {
+        invoiceSequence += 1;
+        invoiceNo = `${prefix}-${now.slice(0, 10).replaceAll('-', '')}-${invoiceSequence}`;
+      }
+      data.invoiceSequence = invoiceSequence;
       const bill = {
         _id: randomUUID(),
-        invoiceNo: `${prefix}-${now.slice(0, 10).replaceAll('-', '')}-${Date.now().toString().slice(-6)}`,
+        invoiceNo,
         customerName: String(req.body.customerName || 'Walk-in customer').trim().slice(0, 100),
         customerPhone: String(req.body.customerPhone || '').trim().slice(0, 20),
         items,

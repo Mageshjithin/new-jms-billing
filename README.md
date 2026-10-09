@@ -6,6 +6,7 @@ A React + Vite billing and stock app with an Express + Node.js API that stores d
 
 - Scan a product barcode/QR code with a phone camera or USB/Bluetooth scanner (the scanner types into the focused barcode field and sends Enter), or search by name/SKU. Camera access requires permission and HTTPS (or localhost).
 - Add items to a bill, adjust quantities, set an optional discount and GST percentage, and save the sale.
+- Invoice numbers use the format `JMS-YYYYMMDD-N`; the final number starts at 1 and increments across days.
 - Stock is checked and decremented on the server when a bill is saved. The invoice has a printable layout.
 - Add and edit products, including SKU, barcode, price and opening stock.
 - View recent bills and sales totals.
