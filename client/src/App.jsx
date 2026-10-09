@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Activity, AlertTriangle, ArrowDownToLine, BarChart3, Check, ChevronDown, CircleDollarSign,
+  Activity, AlertTriangle, ArrowDownToLine, BarChart3, Camera, Check, ChevronDown, CircleDollarSign,
   Clock3, FilePlus2, LayoutDashboard, LoaderCircle, Minus, Package, Plus, Printer,
   QrCode, ReceiptText, Search, Shirt, ShoppingBag, Trash2, Wallet,
 } from 'lucide-react';
@@ -37,6 +37,7 @@ function App() {
   const [error, setError] = useState('');
   const [lastBill, setLastBill] = useState(null);
   const [showProductForm, setShowProductForm] = useState(false);
+  const [showCameraScanner, setShowCameraScanner] = useState(false);
   const barcodeRef = useRef(null);
   const [productForm, setProductForm] = useState({ name: '', sku: '', barcode: '', category: 'Saree', price: '', stock: '' });
 
@@ -71,14 +72,19 @@ function App() {
     });
   }
 
-  function scanBarcode(event) {
-    event.preventDefault();
-    const value = barcode.trim().toLowerCase();
+  function addScannedValue(scannedValue, refocusInput = true) {
+    const value = scannedValue.trim().toLowerCase();
     if (!value) return;
     const found = products.find((p) => p.barcode?.toLowerCase() === value || p.sku?.toLowerCase() === value);
-    if (!found) setError(`No product found for barcode or SKU “${barcode}”. Add it in Inventory first.`);
+    if (!found) setError(`No product found for barcode or SKU “${scannedValue}”. Add it in Inventory first.`);
     else addToCart(found);
-    setBarcode(''); barcodeRef.current?.focus();
+    setBarcode('');
+    if (refocusInput) barcodeRef.current?.focus();
+  }
+
+  function scanBarcode(event) {
+    event.preventDefault();
+    addScannedValue(barcode);
   }
 
   function setQuantity(id, amount) {
@@ -152,7 +158,7 @@ function App() {
 
         {page === 'New bill' && <div className="billing-layout">
           <section className="panel bill-left"><div className="panel-heading"><div><h3>Items</h3><p>Scan a barcode or find a product</p></div><span className="soft-count">{cart.reduce((a, b) => a + b.quantity, 0)} items</span></div>
-            <form className="scan-box" onSubmit={scanBarcode}><QrCode size={19}/><input ref={barcodeRef} value={barcode} onChange={(e) => setBarcode(e.target.value)} placeholder="Scan barcode or enter SKU, then press Enter" autoFocus/><button type="submit">Add</button></form>
+            <form className="scan-box" onSubmit={scanBarcode}><QrCode size={19}/><input ref={barcodeRef} value={barcode} onChange={(e) => setBarcode(e.target.value)} placeholder="Scan barcode or enter SKU, then press Enter" autoFocus/><button type="button" className="camera-scan-button" aria-label="Scan with camera" onClick={() => setShowCameraScanner(true)}><Camera size={15}/><span>Camera</span></button><button type="submit">Add</button></form>
             <div className="search-field"><Search size={17}/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search product name, SKU or barcode"/></div>
             <div className="product-picker">{filtered.slice(0, 12).map((p) => <button className="picker-row" key={p._id} onClick={() => addToCart(p)} disabled={!p.stock}><span className="fabric-swatch">{p.name.slice(0, 1).toUpperCase()}</span><span className="picker-name"><b>{p.name}</b><small>{p.sku} · {p.category}</small></span><span className="picker-price"><b>{money(p.price)}</b><small>{p.stock} in stock</small></span><Plus size={17}/></button>)}{!filtered.length && <div className="empty-state">No matching products. Add them from Inventory.</div>}</div>
             <div className="cart-heading"><h3>Bill items</h3><button className="text-button" onClick={() => setCart([])} disabled={!cart.length}><Trash2 size={14}/> Clear</button></div>
@@ -171,7 +177,82 @@ function App() {
         {page === 'Sales history' && <section className="panel inventory-panel"><div className="panel-heading"><div><h3>Sales history</h3><p>Recent bills and checkout details</p></div><span className="soft-count">{bills.length} bills loaded</span></div><BillTable bills={bills} onSelect={setLastBill}/></section>}
       </div>
     </main>
+    {showCameraScanner && <CameraScanner onClose={() => setShowCameraScanner(false)} onScan={(value) => {
+      setShowCameraScanner(false);
+      addScannedValue(value, false);
+    }}/>}
     {lastBill && <div className="modal-backdrop" onClick={() => setLastBill(null)}><div className="invoice-modal" onClick={(e) => e.stopPropagation()}><div className="invoice-actions"><span className="soft-count">Saved bill</span><button className="secondary" onClick={() => window.print()}><Printer size={16}/> Print receipt</button><button className="icon-button" onClick={() => setLastBill(null)}>×</button></div><Invoice bill={lastBill}/></div></div>}
+  </div>;
+}
+
+function CameraScanner({ onClose, onScan }) {
+  const [error, setError] = useState('');
+  const onScanRef = useRef(onScan);
+  const hasScanned = useRef(false);
+  onScanRef.current = onScan;
+
+  useEffect(() => {
+    let scanner;
+    let cancelled = false;
+    let started = false;
+
+    async function startCamera() {
+      try {
+        const { Html5Qrcode, Html5QrcodeSupportedFormats } = await import('html5-qrcode');
+        if (cancelled) return;
+        scanner = new Html5Qrcode('billing-camera-reader', {
+          verbose: false,
+          formatsToSupport: [
+            Html5QrcodeSupportedFormats.QR_CODE,
+            Html5QrcodeSupportedFormats.EAN_13,
+            Html5QrcodeSupportedFormats.EAN_8,
+            Html5QrcodeSupportedFormats.UPC_A,
+            Html5QrcodeSupportedFormats.UPC_E,
+            Html5QrcodeSupportedFormats.CODE_39,
+            Html5QrcodeSupportedFormats.CODE_93,
+            Html5QrcodeSupportedFormats.CODE_128,
+            Html5QrcodeSupportedFormats.ITF,
+          ],
+        });
+        await scanner.start(
+          { facingMode: 'environment' },
+          { fps: 10, qrbox: { width: 250, height: 180 } },
+          (decodedText) => {
+            if (!cancelled && !hasScanned.current) {
+              hasScanned.current = true;
+              onScanRef.current(decodedText);
+            }
+          },
+          () => {},
+        );
+        started = true;
+        if (cancelled) {
+          await scanner.stop();
+          scanner.clear();
+        }
+      } catch (cameraError) {
+        if (!cancelled) setError(cameraError.message || 'Camera access was unavailable.');
+        else console.error('Unable to start or stop the barcode scanner camera.', cameraError);
+      }
+    }
+
+    startCamera();
+    return () => {
+      cancelled = true;
+      if (started && scanner?.isScanning) {
+        scanner.stop()
+          .then(() => scanner.clear())
+          .catch((cameraError) => console.error('Unable to stop the barcode scanner camera.', cameraError));
+      }
+    };
+  }, []);
+
+  return <div className="scanner-backdrop" onClick={onClose}>
+    <section className="scanner-dialog" role="dialog" aria-modal="true" aria-labelledby="camera-scanner-title" onClick={(event) => event.stopPropagation()}>
+      <header className="scanner-heading"><div><p className="eyebrow">BILLING</p><h2 id="camera-scanner-title">Scan a barcode or QR code</h2></div><button className="icon-button" onClick={onClose} aria-label="Close camera scanner">×</button></header>
+      <div id="billing-camera-reader"/>
+      {error ? <div className="alert error camera-error">Unable to open the camera: {error}. Check camera permission and use HTTPS.</div> : <p className="scanner-hint">Point your rear camera at the product code. Camera access requires permission and a secure connection (HTTPS).</p>}
+    </section>
   </div>;
 }
 
