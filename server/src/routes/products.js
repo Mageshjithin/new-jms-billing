@@ -54,6 +54,17 @@ router.post('/', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+router.delete('/', async (_req, res, next) => {
+  try {
+    const deletedCount = await transaction((data) => {
+      const count = data.products.length;
+      data.products = [];
+      return count;
+    });
+    res.json({ deletedCount });
+  } catch (error) { next(error); }
+});
+
 router.patch('/:id', async (req, res, next) => {
   try {
     const product = await transaction((data) => {

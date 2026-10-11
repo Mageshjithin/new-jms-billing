@@ -48,6 +48,7 @@ Steps:
 - `GET /api/health`
 - `GET /api/products?search=`
 - `POST /api/products`
+- `DELETE /api/products` (clear all inventory products; bills are retained)
 - `PATCH /api/products/:id`
 - `GET /api/bills?limit=30`
 - `POST /api/bills`
