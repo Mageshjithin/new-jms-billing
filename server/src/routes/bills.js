@@ -13,6 +13,28 @@ router.get('/', async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+router.delete('/', async (_req, res, next) => {
+  try {
+    const deletedCount = await transaction((data) => {
+      const count = data.bills.length;
+      data.bills = [];
+      return count;
+    });
+    res.json({ deletedCount });
+  } catch (error) { next(error); }
+});
+
+router.delete('/:id', async (req, res, next) => {
+  try {
+    await transaction((data) => {
+      const index = data.bills.findIndex((bill) => bill._id === req.params.id);
+      if (index === -1) throw httpError(404, 'Bill not found.');
+      data.bills.splice(index, 1);
+    });
+    res.json({ message: 'Bill deleted.' });
+  } catch (error) { next(error); }
+});
+
 router.post('/', async (req, res, next) => {
   try {
     const requested = Array.isArray(req.body.items) ? req.body.items : [];

@@ -65,6 +65,17 @@ router.delete('/', async (_req, res, next) => {
   } catch (error) { next(error); }
 });
 
+router.delete('/:id', async (req, res, next) => {
+  try {
+    await transaction((data) => {
+      const index = data.products.findIndex((product) => product._id === req.params.id);
+      if (index === -1) throw httpError(404, 'Product not found.');
+      data.products.splice(index, 1);
+    });
+    res.json({ message: 'Product deleted.' });
+  } catch (error) { next(error); }
+});
+
 router.patch('/:id', async (req, res, next) => {
   try {
     const product = await transaction((data) => {

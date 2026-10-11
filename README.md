@@ -49,9 +49,12 @@ Steps:
 - `GET /api/products?search=`
 - `POST /api/products`
 - `DELETE /api/products` (clear all inventory products; bills are retained)
+- `DELETE /api/products/:id` (delete one product; bills are retained)
 - `PATCH /api/products/:id`
 - `GET /api/bills?limit=30`
 - `POST /api/bills`
+- `DELETE /api/bills` (clear all bills without changing inventory stock)
+- `DELETE /api/bills/:id` (delete one bill without changing inventory stock)
 - `GET /api/dashboard/summary`
 
 ## Notes
