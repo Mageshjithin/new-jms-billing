@@ -4,7 +4,7 @@ import { loadData, transaction, httpError } from '../db.js';
 
 const router = Router();
 const editable = ['name', 'sku', 'barcode', 'category', 'price', 'stock', 'active'];
-const pick = (body, keys) => Object.fromEntries(Object.entries(body || {}).filter(([key]) => keys.includes(key)));
+const pick = (body,  keys) => Object.fromEntries(Object.entries(body || {}).filter(([key]) => keys.includes(key)));
 
 function clean(p) {
   const product = {
