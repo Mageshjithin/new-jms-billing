@@ -25,10 +25,17 @@ app.use(cors((req, callback) => {
   return callback(new Error('Origin is not allowed by CORS'));
 }));
 app.use(express.json({ limit: '1mb' }));
-app.use(async (_req, _res, next) => {
-  try { await loadData(); next(); } catch (error) { next(error); }
+// Authentication uses environment credentials and must not depend on database availability.
+// Data routes load the database themselves after authentication.
+app.get('/api/health', async (_req, res, next) => {
+  try {
+    await loadData();
+    res.json({ ok: true, service: 'jms-textiles-billing-api' });
+  } catch (error) {
+    console.error('Database health check failed:', error);
+    res.status(503).json({ ok: false, message: 'Database is unavailable. Check the database configuration and API logs.' });
+  }
 });
-app.get('/api/health', (_req, res) => res.json({ ok: true, service: 'jms-textiles-billing-api' }));
 app.post('/api/auth/login', (req, res) => {
   const { username = '', password = '' } = req.body || {};
   const expectedUser = process.env.ADMIN_USERNAME || 'Admin';

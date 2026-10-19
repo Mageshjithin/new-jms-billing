@@ -1,3 +1,4 @@
+import { salesReport } from '../lib/salesReport.js';
 import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
 import { loadData, transaction, httpError } from '../db.js';
@@ -7,9 +8,8 @@ const money = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 
 router.get('/', async (req, res, next) => {
   try {
-    const limit = Math.min(Math.max(Number(req.query.limit) || 30, 1), 100);
     const { bills } = await loadData();
-    res.json({ bills: [...bills].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, limit) });
+    res.json(salesReport(bills, req.query));
   } catch (error) { next(error); }
 });
 
