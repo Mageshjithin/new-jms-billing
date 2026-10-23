@@ -34,9 +34,8 @@ router.get('/', async (req, res, next) => {
     const matches = (value) => String(value || '').toLowerCase().includes(search);
     const { products } = await loadData();
     const result = products
-      .filter((p) => p.active && (!search || matches(p.name) || matches(p.sku) || matches(p.barcode)))
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .slice(0, 100);
+      .filter((p) => p.active && (!search || matches(p.name) || matches(p.sku) || matches(p.barcode) || matches(p.category)))
+      .sort((a, b) => a.name.localeCompare(b.name));
     res.json({ products: result });
   } catch (error) { next(error); }
 });
@@ -81,6 +80,9 @@ router.patch('/:id', async (req, res, next) => {
     const product = await transaction((data) => {
       const index = data.products.findIndex((p) => p._id === req.params.id);
       if (index === -1) throw httpError(404, 'Product not found.');
+      if (req.body.expectedUpdatedAt && req.body.expectedUpdatedAt !== data.products[index].updatedAt) {
+        throw httpError(409, 'This product changed after you opened it. Cancel, refresh inventory and edit again.');
+      }
       const updated = clean({ ...data.products[index], ...pick(req.body, editable), updatedAt: new Date().toISOString() });
       assertUnique(data.products, updated);
       data.products[index] = updated;
