@@ -1,3 +1,4 @@
+import { calculatePayment } from '../lib/payment.js';
 import { salesReport } from '../lib/salesReport.js';
 import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
@@ -64,10 +65,14 @@ router.post('/', async (req, res, next) => {
       const subtotal = money(items.reduce((sum, item) => sum + item.lineTotal, 0));
       const discount = money(Number(req.body.discount) || 0);
       const gstPercent = Number(req.body.gstPercent) || 0;
-      if (discount < 0 || discount > subtotal || gstPercent < 0 || gstPercent > 100) {
+      if (!Number.isFinite(discount) || !Number.isFinite(gstPercent) || discount < 0 || discount > subtotal || gstPercent < 0 || gstPercent > 100) {
         throw httpError(400, 'Discount or GST value is outside the allowed range.');
       }
       const tax = money((subtotal - discount) * gstPercent / 100);
+      const total = money(subtotal - discount + tax);
+      let payment;
+      try { payment = calculatePayment(total, req.body.paymentMethod, req.body.amountReceived); }
+      catch (error) { throw httpError(400, error.message); }
       const prefix = (process.env.INVOICE_PREFIX || 'JMS').replace(/[^A-Za-z0-9-]/g, '').slice(0, 10);
       let invoiceSequence = Number.isSafeInteger(data.invoiceSequence) && data.invoiceSequence >= 0
         ? data.invoiceSequence + 1
@@ -88,7 +93,8 @@ router.post('/', async (req, res, next) => {
         discount,
         gstPercent,
         tax,
-        total: money(subtotal - discount + tax),
+        total,
+        ...payment,
         createdAt: now,
         updatedAt: now,
       };

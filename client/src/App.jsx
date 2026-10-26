@@ -1,3 +1,4 @@
+import PaymentDetails, { paymentStatus } from './PaymentDetails.jsx';
 import SalesExplorer from './SalesExplorer.jsx';
 import { printReceipt } from './printReceipt.js';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -34,6 +35,8 @@ function App() {
   const [customerPhone, setCustomerPhone] = useState('');
   const [discount, setDiscount] = useState('0');
   const [gstPercent, setGstPercent] = useState('0');
+  const [paymentMethod, setPaymentMethod] = useState('Cash');
+  const [amountReceived, setAmountReceived] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -54,11 +57,15 @@ function App() {
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  const subtotal = useMemo(() => cart.reduce((sum, row) => sum + row.price * row.quantity, 0), [cart]);
-  const safeDiscount = Math.min(Math.max(Number(discount) || 0, 0), subtotal);
+  const subtotal = useMemo(() => cart.reduce((sum, row) => sum + Math.round(row.price * row.quantity * 100), 0) / 100, [cart]);
+  const safeDiscount = Math.round(Math.min(Math.max(Number(discount) || 0, 0), subtotal) * 100) / 100;
   const taxable = Math.max(0, subtotal - safeDiscount);
-  const tax = taxable * Math.max(0, Number(gstPercent) || 0) / 100;
-  const total = taxable + tax;
+  const tax = Math.round(taxable * Math.max(0, Number(gstPercent) || 0)) / 100;
+  const total = Math.round((taxable + tax) * 100) / 100;
+  const received = Number(amountReceived);
+  const paymentError = amountReceived.trim() === '' ? 'Enter the amount received.' : !Number.isFinite(received) || received < 0 || received > 100000000 || Math.abs(received * 100 - Math.round(received * 100)) > 0.00001 ? 'Enter a valid amount with up to two decimal places.' : paymentMethod !== 'Cash' && received > total ? 'Digital payment cannot exceed the bill total.' : '';
+  const balanceDue = Math.max(0, Math.round((total - received) * 100) / 100);
+  const changeDue = Math.max(0, Math.round((received - total) * 100) / 100);
   const filtered = useMemo(() => {
     const value = (barcode || search).trim().toLowerCase();
     return products.filter((p) => !value || `${p.name} ${p.sku} ${p.barcode || ''} ${p.category}`.toLowerCase().includes(value));
@@ -107,13 +114,14 @@ function App() {
 
   async function saveBill() {
     if (!cart.length) { setError('Scan or select products before saving the bill.'); return; }
+    if (paymentError) { setError(paymentError); return; }
     setBusy(true); setError(''); setMessage('');
     try {
       const result = await request('/bills', { method: 'POST', body: JSON.stringify({
-        customerName: customerName || 'Walk-in customer', customerPhone, discount: safeDiscount,
+        customerName: customerName || 'Walk-in customer', customerPhone, discount: safeDiscount, paymentMethod, amountReceived: received,
         gstPercent: Math.max(0, Number(gstPercent) || 0), items: cart.map((x) => ({ productId: x._id, quantity: x.quantity })),
       }) });
-      setLastBill(result.bill); setCart([]); setCustomerName(''); setCustomerPhone(''); setDiscount('0');
+      setLastBill(result.bill); setAmountReceived(''); setPaymentMethod('Cash'); setCart([]); setCustomerName(''); setCustomerPhone(''); setDiscount('0');
       setMessage(`Bill ${result.bill.invoiceNo} saved. Stock has been updated.`); await load();
     } catch (e) { setError(e.message); await load(); }
     finally { setBusy(false); }
@@ -190,6 +198,7 @@ function App() {
 
   async function clearBills() {
     if (!window.confirm('Delete all bills from sales history? Inventory stock will not be changed. This cannot be undone.')) return;
+    if (paymentError) { setError(paymentError); return; }
     setBusy(true); setError(''); setMessage('');
     try {
       const result = await request('/bills', { method: 'DELETE' });
@@ -246,7 +255,16 @@ function App() {
             <label className="field-label">Customer name <span>OPTIONAL</span><input value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="Walk-in customer"/></label>
             <label className="field-label">Phone number <span>OPTIONAL</span><input value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} placeholder="Customer phone" inputMode="tel"/></label>
             <div className="summary-lines"><div><span>Subtotal</span><b>{money(subtotal)}</b></div><div className="discount-line"><label>Discount <span>(₹)</span></label><input type="number" min="0" max={subtotal} value={discount} onChange={(e) => setDiscount(e.target.value)} /></div><div className="discount-line"><label>GST <span>(%)</span></label><input type="number" min="0" max="100" value={gstPercent} onChange={(e) => setGstPercent(e.target.value)} /></div><div><span>Tax</span><b>{money(tax)}</b></div></div>
-            <div className="total-row"><span>Total payable</span><strong>{money(total)}</strong></div><button className="primary save-bill" onClick={saveBill} disabled={busy || !cart.length}>{busy ? <LoaderCircle className="spin" size={18}/> : <Check size={18}/>} {busy ? 'Saving bill…' : 'Save bill'}</button><p className="checkout-foot"><Check size={14}/> Stock will update after this bill is saved</p>
+            <div className="total-row"><span>Total payable</span><strong>{money(total)}</strong></div><div className="payment-form">
+              <label className="field-label">Payment method<select value={paymentMethod} onChange={e => setPaymentMethod(e.target.value)}>{['Cash', 'UPI', 'Card', 'Bank transfer'].map(method => <option key={method}>{method}</option>)}</select></label>
+              <label className="field-label">{paymentMethod === 'Cash' ? 'Cash received (₹)' : 'Amount received (₹)'}<input type="number" min="0" step="0.01" max="100000000" placeholder="Enter amount received" value={amountReceived} onChange={e => setAmountReceived(e.target.value)} /></label>
+              <button type="button" className="text-button" onClick={() => setAmountReceived(total.toFixed(2))}>Exact amount</button>
+              <div className="summary-lines" aria-live="polite">{amountReceived !== '' && !paymentError && <>
+                {paymentMethod === 'Cash' && <div><span>Change to return</span><b>{money(changeDue)}</b></div>}
+                <div><span>Balance due</span><b>{money(balanceDue)}</b></div>
+                <div><span>Status</span><b>{balanceDue === 0 ? 'Paid' : received > 0 ? 'Partially paid' : 'Unpaid'}</b></div>
+              </>}{amountReceived !== '' && paymentError && <p role="alert">{paymentError}</p>}</div>
+            </div><button className="primary save-bill" onClick={saveBill} disabled={busy || !cart.length}>{busy ? <LoaderCircle className="spin" size={18}/> : <Check size={18}/>} {busy ? 'Saving bill…' : 'Save bill'}</button><p className="checkout-foot"><Check size={14}/> Stock will update after this bill is saved</p>
           </aside>
         </div>}
 
@@ -336,6 +354,8 @@ function CameraScanner({ onClose, onScan }) {
 
 function Login({ onLogin }) {
   const [username, setUsername] = useState(''); const [password, setPassword] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState('Cash');
+  const [amountReceived, setAmountReceived] = useState('');
   const [busy, setBusy] = useState(false); const [error, setError] = useState('');
   async function submit(event) {
     event.preventDefault(); setBusy(true); setError('');
@@ -347,8 +367,8 @@ function Login({ onLogin }) {
 
 function Field({ label, value, onChange, type = 'text', required }) { return <label className="field-label">{label}<input type={type} required={required} min={type === 'number' ? '0' : undefined} step={type === 'number' && label.includes('price') ? '0.01' : type === 'number' ? '1' : undefined} value={value} onChange={(e) => onChange(e.target.value)} /></label>; }
 function Stat({ icon: Icon, label, value, note, tone }) { return <div className="stat-card"><span className={`stat-icon ${tone}`}><Icon size={20}/></span><span className="stat-label">{label}</span><strong>{value}</strong><small>{note}</small></div>; }
-function BillTable({ bills, onSelect, onDelete, busy = false }) { return <div className="table-wrap"><table><thead><tr><th>INVOICE</th><th>CUSTOMER</th><th>ITEMS</th><th>DATE & TIME</th><th>AMOUNT</th><th>STATUS</th>{onDelete && <th>ACTION</th>}</tr></thead><tbody>{bills.map((b) => <tr key={b._id} className="click-row" onClick={() => onSelect(b)}><td><b className="invoice-link">{b.invoiceNo}</b></td><td>{b.customerName || 'Walk-in customer'}</td><td>{b.items?.reduce((n, item) => n + item.quantity, 0) || 0}</td><td>{dateTime(b.createdAt)}</td><td><b>{money(b.total)}</b></td><td><span className="paid-pill"><span/>Paid</span></td>{onDelete && <td><button type="button" className="icon-button remove" aria-label={`Delete bill ${b.invoiceNo}`} title={`Delete ${b.invoiceNo}`} disabled={busy} onClick={(event) => { event.stopPropagation(); onDelete(b); }}><Trash2 size={16}/></button></td>}</tr>)}</tbody></table>{!bills.length && <div className="empty-state"><ReceiptText size={22}/>No bills saved yet.</div>}</div>; }
+function BillTable({ bills, onSelect, onDelete, busy = false }) { return <div className="table-wrap"><table><thead><tr><th>INVOICE</th><th>CUSTOMER</th><th>ITEMS</th><th>DATE & TIME</th><th>AMOUNT</th><th>PAYMENT METHOD</th><th>BALANCE DUE</th><th>STATUS</th>{onDelete && <th>ACTION</th>}</tr></thead><tbody>{bills.map((b) => <tr key={b._id} className="click-row" onClick={() => onSelect(b)}><td><b className="invoice-link">{b.invoiceNo}</b></td><td>{b.customerName || 'Walk-in customer'}</td><td>{b.items?.reduce((n, item) => n + item.quantity, 0) || 0}</td><td>{dateTime(b.createdAt)}</td><td><b>{money(b.total)}</b></td><td>{b.paymentMethod || 'Not recorded'}</td><td>{b.paymentMethod ? money(b.balanceDue) : '—'}</td><td>{paymentStatus(b)}</td>{onDelete && <td><button type="button" className="icon-button remove" aria-label={`Delete bill ${b.invoiceNo}`} title={`Delete ${b.invoiceNo}`} disabled={busy} onClick={(event) => { event.stopPropagation(); onDelete(b); }}><Trash2 size={16}/></button></td>}</tr>)}</tbody></table>{!bills.length && <div className="empty-state"><ReceiptText size={22}/>No bills saved yet.</div>}</div>; }
 function LowStock({ products }) { return <div className="lowstock-list">{products.map((p) => <div className="lowstock-row" key={p._id}><span className="fabric-swatch small">{p.name.slice(0,1)}</span><b>{p.name}</b><small>{p.sku}</small><span className="stock-badge low">{p.stock} left</span></div>)}{!products.length && <div className="empty-state">Stock levels look good. No low-stock items.</div>}</div>; }
-function Invoice({ bill }) { return <div className="invoice-paper"><div className="invoice-brand"><span className="brand-mark"><Shirt size={20}/></span><div><h2>JMS Textiles</h2><p className="shop-contact">No:58/1 Vandikaran Street,<br/>Guindy 600032</p><p className="shop-contact">Phone: 9043557183 / 7845999726</p><p>SALES INVOICE</p></div></div><div className="invoice-meta"><div><small>INVOICE NUMBER</small><b>{bill.invoiceNo}</b></div><div><small>DATE</small><b>{dateTime(bill.createdAt)}</b></div><div><small>CUSTOMER</small><b>{bill.customerName || 'Walk-in customer'}</b>{bill.customerPhone && <span>{bill.customerPhone}</span>}</div></div><table className="invoice-items"><thead><tr><th>ITEM</th><th>QTY</th><th>PRICE</th><th>AMOUNT</th></tr></thead><tbody>{bill.items?.map((item, i) => <tr key={i}><td>{item.name}<small>{item.sku}</small></td><td>{item.quantity}</td><td>{money(item.unitPrice)}</td><td>{money(item.lineTotal)}</td></tr>)}</tbody></table><div className="invoice-totals"><div><span>Subtotal</span><b>{money(bill.subtotal)}</b></div>{bill.discount > 0 && <div><span>Discount</span><b>− {money(bill.discount)}</b></div>}{bill.gstPercent > 0 && <div><span>GST ({bill.gstPercent}%)</span><b>{money(bill.tax)}</b></div>}<div className="invoice-grand"><span>Total paid</span><b>{money(bill.total)}</b></div></div><p className="thankyou">Thank you for shopping with JMS Textiles</p></div>; }
+function Invoice({ bill }) { return <div className="invoice-paper"><div className="invoice-brand"><span className="brand-mark"><Shirt size={20}/></span><div><h2>JMS Textiles</h2><p className="shop-contact">No:58/1 Vandikaran Street,<br/>Guindy 600032</p><p className="shop-contact">Phone: 9043557183 / 7845999726</p><p>SALES INVOICE</p></div></div><div className="invoice-meta"><div><small>INVOICE NUMBER</small><b>{bill.invoiceNo}</b></div><div><small>DATE</small><b>{dateTime(bill.createdAt)}</b></div><div><small>CUSTOMER</small><b>{bill.customerName || 'Walk-in customer'}</b>{bill.customerPhone && <span>{bill.customerPhone}</span>}</div></div><table className="invoice-items"><thead><tr><th>ITEM</th><th>QTY</th><th>PRICE</th><th>AMOUNT</th></tr></thead><tbody>{bill.items?.map((item, i) => <tr key={i}><td>{item.name}<small>{item.sku}</small></td><td>{item.quantity}</td><td>{money(item.unitPrice)}</td><td>{money(item.lineTotal)}</td></tr>)}</tbody></table><div className="invoice-totals"><div><span>Subtotal</span><b>{money(bill.subtotal)}</b></div>{bill.discount > 0 && <div><span>Discount</span><b>− {money(bill.discount)}</b></div>}{bill.gstPercent > 0 && <div><span>GST ({bill.gstPercent}%)</span><b>{money(bill.tax)}</b></div>}<div className="invoice-grand"><span>Bill total</span><b>{money(bill.total)}</b></div><PaymentDetails bill={bill}/></div><p className="thankyou">Thank you for shopping with JMS Textiles</p></div>; }
 
 export default App;
