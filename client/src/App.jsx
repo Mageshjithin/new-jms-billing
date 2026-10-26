@@ -60,9 +60,9 @@ function App() {
   const tax = taxable * Math.max(0, Number(gstPercent) || 0) / 100;
   const total = taxable + tax;
   const filtered = useMemo(() => {
-    const value = search.trim().toLowerCase();
+    const value = (barcode || search).trim().toLowerCase();
     return products.filter((p) => !value || `${p.name} ${p.sku} ${p.barcode || ''} ${p.category}`.toLowerCase().includes(value));
-  }, [products, search]);
+  }, [products, search, barcode]);
 
   function addToCart(product) {
     setError(''); setMessage('');
@@ -89,7 +89,16 @@ function App() {
 
   function scanBarcode(event) {
     event.preventDefault();
-    addScannedValue(barcode);
+    const value = barcode.trim().toLowerCase();
+    if (!value) return;
+    const exact = products.find(p => String(p.barcode || '').toLowerCase() === value || String(p.sku || '').toLowerCase() === value);
+    if (exact) {
+      addScannedValue(barcode);
+      setSearch('');
+    } else {
+      setSearch('');
+      setError(filtered.length ? 'Select a matching product below to add it to the bill.' : 'No matching products. Check the barcode, SKU or product name.');
+    }
   }
 
   function setQuantity(id, amount) {
@@ -226,9 +235,10 @@ function App() {
 
         {page === 'New bill' && <div className="billing-layout">
           <section className="panel bill-left"><div className="panel-heading"><div><h3>Items</h3><p>Scan a barcode or find a product</p></div><span className="soft-count">{cart.reduce((a, b) => a + b.quantity, 0)} items</span></div>
-            <form className="scan-box" onSubmit={scanBarcode}><QrCode size={19}/><input ref={barcodeRef} value={barcode} onChange={(e) => setBarcode(e.target.value)} placeholder="Scan barcode or enter SKU, then press Enter" autoFocus/><button type="button" className="camera-scan-button" aria-label="Scan with camera" onClick={() => setShowCameraScanner(true)}><Camera size={15}/><span>Camera</span></button><button type="submit">Add</button></form>
-            <div className="search-field"><Search size={17}/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search product name, SKU or barcode"/></div>
-            <div className="product-picker">{filtered.slice(0, 12).map((p) => <button className="picker-row" key={p._id} onClick={() => addToCart(p)} disabled={!p.stock}><span className="fabric-swatch">{p.name.slice(0, 1).toUpperCase()}</span><span className="picker-name"><b>{p.name}</b><small>{p.sku} · {p.category}</small></span><span className="picker-price"><b>{money(p.price)}</b><small>{p.stock} in stock</small></span><Plus size={17}/></button>)}{!filtered.length && <div className="empty-state">No matching products. Add them from Inventory.</div>}</div>
+            <form className="scan-box" style={{ height: 'auto', minHeight: 46, flexWrap: 'wrap', padding: '8px 10px' }} onSubmit={scanBarcode}><QrCode size={19}/><input ref={barcodeRef} style={{ flex: '1 1 180px' }} value={barcode} onChange={(e) => { setBarcode(e.target.value); setSearch(''); setError(''); }} aria-label="Barcode or product search" placeholder="Scan or search barcode, SKU or product name" autoFocus/><button type="button" className="camera-scan-button" aria-label="Scan with camera" onClick={() => setShowCameraScanner(true)}><Camera size={15}/><span>Camera</span></button><button type="button" aria-label="Search barcode or product" onClick={() => { setSearch(''); setError(''); barcodeRef.current?.focus(); }}><Search size={15}/> Search</button><button type="submit">Add</button></form>
+            <div className="search-field"><Search size={17}/><input value={search} onChange={(e) => { setSearch(e.target.value); setBarcode(''); setError(''); }} aria-label="Search products" placeholder="Search product name, SKU or barcode"/></div>
+            {(barcode || search) && <div className="panel-heading"><span className="soft-count" role="status">{filtered.length} matching products</span><button type="button" className="text-button" onClick={() => { setBarcode(''); setSearch(''); setError(''); }}>Clear search</button></div>}
+            <div className="product-picker">{filtered.map((p) => <button className="picker-row" key={p._id} onClick={() => { addToCart(p); setBarcode(''); setSearch(''); barcodeRef.current?.focus(); }} disabled={!p.stock}><span className="fabric-swatch">{p.name.slice(0, 1).toUpperCase()}</span><span className="picker-name"><b>{p.name}</b><small>{p.sku} · {p.barcode || 'No barcode'} · {p.category}</small></span><span className="picker-price"><b>{money(p.price)}</b><small>{p.stock} in stock</small></span><Plus size={17}/></button>)}{!filtered.length && <div className="empty-state">No matching products. Add them from Inventory.</div>}</div>
             <div className="cart-heading"><h3>Bill items</h3><button className="text-button" onClick={() => setCart([])} disabled={!cart.length}><Trash2 size={14}/> Clear</button></div>
             <div className="cart-list">{cart.map((item) => <div className="cart-row" key={item._id}><span className="fabric-swatch small">{item.name.slice(0, 1).toUpperCase()}</span><span className="cart-name"><b>{item.name}</b><small>{money(item.price)} each</small></span><div className="qty-control"><button onClick={() => setQuantity(item._id, item.quantity - 1)}><Minus size={13}/></button><span>{item.quantity}</span><button onClick={() => setQuantity(item._id, item.quantity + 1)}><Plus size={13}/></button></div><b className="line-total">{money(item.price * item.quantity)}</b><button className="icon-button remove" onClick={() => setCart((c) => c.filter((x) => x._id !== item._id))}><Trash2 size={16}/></button></div>)}{!cart.length && <div className="empty-cart"><ShoppingBag size={23}/><b>No items yet</b><span>Scan a product barcode or select one above.</span></div>}</div>
           </section>
