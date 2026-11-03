@@ -37,5 +37,15 @@ test('bill API persists payment, preserves history and rolls back invalid reques
     const partial=await post({paymentMethod:'UPI',amountReceived:800});assert.equal(partial.status,201);assert.equal(partial.data.bill.balanceDue,50);assert.equal(partial.data.bill.paymentStatus,'Partially paid');
     for (const payment of [{},{paymentMethod:'Cash',amountReceived:-1},{paymentMethod:'UPI',amountReceived:1000},{paymentMethod:'invalid',amountReceived:850}]) {const before=structuredClone(state);assert.equal((await post(payment)).status,400);assert.deepEqual(state,before);}
     const bills=(await (await fetch(base)).json()).bills;assert.equal(bills.length,2);assert.equal(bills.find(b=>b.paymentMethod==='Cash').changeDue,150);assert.equal(bills.find(b=>b.paymentMethod==='UPI').balanceDue,50);
+    const stockBefore = structuredClone(state.products);
+    const manual = await post({ billingMode: 'manual', items: [{ name: 'Manual saree', quantity: 2, rate: 650 }], discount: 100, paymentMethod: 'Cash', amountReceived: 1500 });
+    assert.equal(manual.status, 201);assert.equal(manual.data.bill.billingMode, 'manual');assert.equal(manual.data.bill.total, 1200);assert.equal(manual.data.bill.changeDue, 300);assert.deepEqual(manual.data.remainingStock, []);assert.deepEqual(state.products, stockBefore);
+    for (const items of [[{name:'',quantity:1,rate:10}], [{name:'Item',quantity:0,rate:10}], [{name:'Item',quantity:1,rate:-1}]]) {
+      const before = structuredClone(state);
+      assert.equal((await post({billingMode:'manual',items,paymentMethod:'Cash',amountReceived:1000})).status,400);assert.deepEqual(state,before);
+    }
+    assert.equal((await post({billingMode:'unknown',paymentMethod:'Cash',amountReceived:850})).status,400);
+    const history=(await (await fetch(base)).json()).bills;assert.equal(history.length,3);assert.equal(history.find(b=>b.billingMode==='manual').items[0].name,'Manual saree');
   } finally {server.close();hooks.deregister();delete globalThis.paymentTestStore;}
 });
+

@@ -1,5 +1,7 @@
 import PaymentDetails, { paymentStatus } from './PaymentDetails.jsx';
 import SalesExplorer from './SalesExplorer.jsx';
+import ManualItems from './ManualItems.jsx';
+import './manual-billing.css';
 import { printReceipt } from './printReceipt.js';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -29,6 +31,9 @@ function App() {
   const [products, setProducts] = useState([]);
   const [bills, setBills] = useState([]);
   const [cart, setCart] = useState([]);
+  const [manualCart, setManualCart] = useState([{ name: '', quantity: '1', rate: '' }]);
+  const isManual = page === 'Billing option';
+  const billItems = isManual ? manualCart : cart;
   const [search, setSearch] = useState('');
   const [barcode, setBarcode] = useState('');
   const [customerName, setCustomerName] = useState('');
@@ -57,7 +62,9 @@ function App() {
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  const subtotal = useMemo(() => cart.reduce((sum, row) => sum + Math.round(row.price * row.quantity * 100), 0) / 100, [cart]);
+  const subtotal = useMemo(() => isManual
+    ? manualCart.reduce((sum, row) => sum + Math.round((Number(row.rate) || 0) * 100) * (Number(row.quantity) || 0), 0) / 100
+    : cart.reduce((sum, row) => sum + Math.round(row.price * row.quantity * 100), 0) / 100, [cart, manualCart, isManual]);
   const safeDiscount = Math.round(Math.min(Math.max(Number(discount) || 0, 0), subtotal) * 100) / 100;
   const taxable = Math.max(0, subtotal - safeDiscount);
   const tax = Math.round(taxable * Math.max(0, Number(gstPercent) || 0)) / 100;
@@ -113,17 +120,22 @@ function App() {
   }
 
   async function saveBill() {
-    if (!cart.length) { setError('Scan or select products before saving the bill.'); return; }
+    if (busy) return;
+    if (!billItems.length) { setError(isManual ? 'Add at least one manual item.' : 'Scan or select products before saving the bill.'); return; }
+    if (isManual && manualCart.some(item => !item.name.trim() || item.name.trim().length > 120 || !Number.isSafeInteger(Number(item.quantity)) || Number(item.quantity) < 1 || Number(item.quantity) > 1000000 || item.rate.trim() === '' || !Number.isFinite(Number(item.rate)) || Number(item.rate) < 0 || Number(item.rate) > 100000000 || Math.abs(Number(item.rate) * 100 - Math.round(Number(item.rate) * 100)) > 0.00001 || Math.round(Number(item.rate) * 100) * Number(item.quantity) > 10000000000)) {
+      setError('Enter an item name, positive whole-number quantity and valid rate with up to two decimal places for every item.'); return;
+    }
     if (paymentError) { setError(paymentError); return; }
     setBusy(true); setError(''); setMessage('');
     try {
       const result = await request('/bills', { method: 'POST', body: JSON.stringify({
         customerName: customerName || 'Walk-in customer', customerPhone, discount: safeDiscount, paymentMethod, amountReceived: received,
-        gstPercent: Math.max(0, Number(gstPercent) || 0), items: cart.map((x) => ({ productId: x._id, quantity: x.quantity })),
+        billingMode: isManual ? 'manual' : 'inventory',
+        gstPercent: Math.max(0, Number(gstPercent) || 0), items: isManual ? manualCart.map(item => ({ name: item.name.trim(), quantity: Number(item.quantity), rate: Number(item.rate) })) : cart.map((x) => ({ productId: x._id, quantity: x.quantity })),
       }) });
-      setLastBill(result.bill); setAmountReceived(''); setPaymentMethod('Cash'); setCart([]); setCustomerName(''); setCustomerPhone(''); setDiscount('0');
-      setMessage(`Bill ${result.bill.invoiceNo} saved. Stock has been updated.`); await load();
-    } catch (e) { setError(e.message); await load(); }
+      setLastBill(result.bill); setAmountReceived(''); setPaymentMethod('Cash'); if (isManual) setManualCart([{ name: '', quantity: '1', rate: '' }]); else setCart([]); setCustomerName(''); setCustomerPhone(''); setDiscount('0');
+      setMessage(isManual ? `Manual bill ${result.bill.invoiceNo} saved.` : `Bill ${result.bill.invoiceNo} saved. Stock has been updated.`); await load();
+    } catch (e) { await load(); setError(e.message); }
     finally { setBusy(false); }
   }
 
@@ -218,12 +230,12 @@ function App() {
       <div className="brand"><span className="brand-mark"><Shirt size={21}/></span><span><strong>JMS</strong><small>TEXTILES</small></span></div>
       <div className="store-label">STORE MANAGEMENT</div>
       <nav>{[
-        ['Overview', LayoutDashboard], ['New bill', ReceiptText], ['Inventory', Package], ['Sales history', BarChart3], ['Sales reports', BarChart3],
+        ['Overview', LayoutDashboard], ['New bill', ReceiptText], ['Billing option', Pencil], ['Inventory', Package], ['Sales history', BarChart3], ['Sales reports', BarChart3],
       ].map(([label, Icon]) => <button key={label} className={`nav-item ${page === label ? 'active' : ''}`} onClick={() => setPage(label)}><Icon size={18}/><span>{label}</span>{label === 'New bill' && <span className="nav-dot"/>}</button>)}</nav>
       <div className="sidebar-bottom"><div className="online-dot"/> <span>Billing system ready</span><span className="version">v1.0</span></div>
     </aside>
     <main className="main-area">
-      <header className="topbar"><div><div className="breadcrumb">JMS Textiles <span>/</span> {page}</div><h1>{page === 'New bill' ? 'Create a bill' : page}</h1></div><div className="top-actions"><span className="today-chip"><Clock3 size={15}/>{new Date().toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' })}</span><button className="avatar logout-button" title="Sign out" onClick={() => { localStorage.removeItem('jms_session'); setLoggedIn(false); setCart([]); }}>JM</button></div></header>
+      <header className="topbar"><div><div className="breadcrumb">JMS Textiles <span>/</span> {page}</div><h1>{isManual ? 'Manual billing' : page === 'New bill' ? 'Create a bill' : page}</h1></div><div className="top-actions"><span className="today-chip"><Clock3 size={15}/>{new Date().toLocaleDateString('en-IN', { weekday: 'short', day: '2-digit', month: 'short', year: 'numeric' })}</span><button className="avatar logout-button" title="Sign out" onClick={() => { localStorage.removeItem('jms_session'); setLoggedIn(false); setCart([]); setManualCart([{ name: '', quantity: '1', rate: '' }]); }}>JM</button></div></header>
       <div className="content">
         {error && <div className="alert error"><AlertTriangle size={17}/>{error}<button onClick={() => setError('')}>×</button></div>}
         {message && <div className="alert success"><Check size={17}/>{message}<button onClick={() => setMessage('')}>×</button></div>}
@@ -242,15 +254,15 @@ function App() {
           <section className="panel lowstock-panel"><div className="panel-heading"><div><h3>Stock to watch</h3><p>Products at 5 units or fewer</p></div><button className="text-button" onClick={() => setPage('Inventory')}>Inventory <ChevronDown size={15}/></button></div><LowStock products={products.filter((p) => p.stock <= 5).slice(0, 5)}/></section>
         </>}
 
-        {page === 'New bill' && <div className="billing-layout">
-          <section className="panel bill-left"><div className="panel-heading"><div><h3>Items</h3><p>Scan a barcode or find a product</p></div><span className="soft-count">{cart.reduce((a, b) => a + b.quantity, 0)} items</span></div>
+        {(page === 'New bill' || isManual) && <div className="billing-layout">
+          {isManual ? <ManualItems items={manualCart} onChange={setManualCart} busy={busy} /> : <section className="panel bill-left"><div className="panel-heading"><div><h3>Items</h3><p>Scan a barcode or find a product</p></div><span className="soft-count">{cart.reduce((a, b) => a + b.quantity, 0)} items</span></div>
             <form className="scan-box" style={{ height: 'auto', minHeight: 46, flexWrap: 'wrap', padding: '8px 10px' }} onSubmit={scanBarcode}><QrCode size={19}/><input ref={barcodeRef} style={{ flex: '1 1 180px' }} value={barcode} onChange={(e) => { setBarcode(e.target.value); setSearch(''); setError(''); }} aria-label="Barcode or product search" placeholder="Scan or search barcode, SKU or product name" autoFocus/><button type="button" className="camera-scan-button" aria-label="Scan with camera" onClick={() => setShowCameraScanner(true)}><Camera size={15}/><span>Camera</span></button><button type="button" aria-label="Search barcode or product" onClick={() => { setSearch(''); setError(''); barcodeRef.current?.focus(); }}><Search size={15}/> Search</button><button type="submit">Add</button></form>
             <div className="search-field"><Search size={17}/><input value={search} onChange={(e) => { setSearch(e.target.value); setBarcode(''); setError(''); }} aria-label="Search products" placeholder="Search product name, SKU or barcode"/></div>
             {(barcode || search) && <div className="panel-heading"><span className="soft-count" role="status">{filtered.length} matching products</span><button type="button" className="text-button" onClick={() => { setBarcode(''); setSearch(''); setError(''); }}>Clear search</button></div>}
             <div className="product-picker">{filtered.map((p) => <button className="picker-row" key={p._id} onClick={() => { addToCart(p); setBarcode(''); setSearch(''); barcodeRef.current?.focus(); }} disabled={!p.stock}><span className="fabric-swatch">{p.name.slice(0, 1).toUpperCase()}</span><span className="picker-name"><b>{p.name}</b><small>{p.sku} · {p.barcode || 'No barcode'} · {p.category}</small></span><span className="picker-price"><b>{money(p.price)}</b><small>{p.stock} in stock</small></span><Plus size={17}/></button>)}{!filtered.length && <div className="empty-state">No matching products. Add them from Inventory.</div>}</div>
             <div className="cart-heading"><h3>Bill items</h3><button className="text-button" onClick={() => setCart([])} disabled={!cart.length}><Trash2 size={14}/> Clear</button></div>
             <div className="cart-list">{cart.map((item) => <div className="cart-row" key={item._id}><span className="fabric-swatch small">{item.name.slice(0, 1).toUpperCase()}</span><span className="cart-name"><b>{item.name}</b><small>{money(item.price)} each</small></span><div className="qty-control"><button onClick={() => setQuantity(item._id, item.quantity - 1)}><Minus size={13}/></button><span>{item.quantity}</span><button onClick={() => setQuantity(item._id, item.quantity + 1)}><Plus size={13}/></button></div><b className="line-total">{money(item.price * item.quantity)}</b><button className="icon-button remove" onClick={() => setCart((c) => c.filter((x) => x._id !== item._id))}><Trash2 size={16}/></button></div>)}{!cart.length && <div className="empty-cart"><ShoppingBag size={23}/><b>No items yet</b><span>Scan a product barcode or select one above.</span></div>}</div>
-          </section>
+          </section>}
           <aside className="panel checkout-panel"><div className="checkout-title"><div><p className="eyebrow">CHECKOUT</p><h3>Bill summary</h3></div><ReceiptText size={20}/></div>
             <label className="field-label">Customer name <span>OPTIONAL</span><input value={customerName} onChange={(e) => setCustomerName(e.target.value)} placeholder="Walk-in customer"/></label>
             <label className="field-label">Phone number <span>OPTIONAL</span><input value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} placeholder="Customer phone" inputMode="tel"/></label>
@@ -264,7 +276,7 @@ function App() {
                 <div><span>Balance due</span><b>{money(balanceDue)}</b></div>
                 <div><span>Status</span><b>{balanceDue === 0 ? 'Paid' : received > 0 ? 'Partially paid' : 'Unpaid'}</b></div>
               </>}{amountReceived !== '' && paymentError && <p role="alert">{paymentError}</p>}</div>
-            </div><button className="primary save-bill" onClick={saveBill} disabled={busy || !cart.length}>{busy ? <LoaderCircle className="spin" size={18}/> : <Check size={18}/>} {busy ? 'Saving bill…' : 'Save bill'}</button><p className="checkout-foot"><Check size={14}/> Stock will update after this bill is saved</p>
+            </div><button className="primary save-bill" onClick={saveBill} disabled={busy || !billItems.length}>{busy ? <LoaderCircle className="spin" size={18}/> : <Check size={18}/>} {busy ? 'Saving bill…' : 'Save bill'}</button><p className="checkout-foot"><Check size={14}/> {isManual ? 'Manual bill will be saved to sales history' : 'Stock will update after this bill is saved'}</p>
           </aside>
         </div>}
 
@@ -372,3 +384,4 @@ function LowStock({ products }) { return <div className="lowstock-list">{product
 function Invoice({ bill }) { return <div className="invoice-paper"><div className="invoice-brand"><span className="brand-mark"><Shirt size={20}/></span><div><h2>JMS Textiles</h2><p className="shop-contact">No:58/1 Vandikaran Street,<br/>Guindy 600032</p><p className="shop-contact">Phone: 9043557183 / 7845999726</p><p>SALES INVOICE</p></div></div><div className="invoice-meta"><div><small>INVOICE NUMBER</small><b>{bill.invoiceNo}</b></div><div><small>DATE</small><b>{dateTime(bill.createdAt)}</b></div><div><small>CUSTOMER</small><b>{bill.customerName || 'Walk-in customer'}</b>{bill.customerPhone && <span>{bill.customerPhone}</span>}</div></div><table className="invoice-items"><thead><tr><th>ITEM</th><th>QTY</th><th>PRICE</th><th>AMOUNT</th></tr></thead><tbody>{bill.items?.map((item, i) => <tr key={i}><td>{item.name}<small>{item.sku}</small></td><td>{item.quantity}</td><td>{money(item.unitPrice)}</td><td>{money(item.lineTotal)}</td></tr>)}</tbody></table><div className="invoice-totals"><div><span>Subtotal</span><b>{money(bill.subtotal)}</b></div>{bill.discount > 0 && <div><span>Discount</span><b>− {money(bill.discount)}</b></div>}{bill.gstPercent > 0 && <div><span>GST ({bill.gstPercent}%)</span><b>{money(bill.tax)}</b></div>}<div className="invoice-grand"><span>Bill total</span><b>{money(bill.total)}</b></div><PaymentDetails bill={bill}/></div><p className="thankyou">Thank you for shopping with JMS Textiles</p></div>; }
 
 export default App;
+
