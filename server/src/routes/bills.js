@@ -1,5 +1,6 @@
 import { calculatePayment } from '../lib/payment.js';
 import { salesReport } from '../lib/salesReport.js';
+import { manualItems } from '../lib/manualItems.js';
 import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
 import { loadData, transaction, httpError } from '../db.js';
@@ -38,11 +39,14 @@ router.delete('/:id', async (req, res, next) => {
 
 router.post('/', async (req, res, next) => {
   try {
+    const billingMode = req.body.billingMode ?? 'inventory';
+    if (!['inventory', 'manual'].includes(billingMode)) throw httpError(400, 'Choose a valid billing mode.');
     const requested = Array.isArray(req.body.items) ? req.body.items : [];
     if (!requested.length) return res.status(400).json({ message: 'Add at least one product to the bill.' });
 
+    const enteredItems = billingMode === 'manual' ? manualItems(requested) : [];
     const quantities = new Map();
-    for (const item of requested) {
+    for (const item of billingMode === 'manual' ? [] : requested) {
       if (typeof item.productId !== 'string' || !item.productId || !Number.isInteger(Number(item.quantity)) || Number(item.quantity) < 1) {
         return res.status(400).json({ message: 'Each item needs a valid product and whole-number quantity.' });
       }
@@ -52,7 +56,7 @@ router.post('/', async (req, res, next) => {
     // Runs as one transaction: if anything fails, no stock is reduced and no bill is saved.
     const result = await transaction((data) => {
       const now = new Date().toISOString();
-      const items = [];
+      const items = [...enteredItems];
       for (const [productId, quantity] of quantities) {
         const product = data.products.find((p) => p._id === productId && p.active);
         if (!product) throw httpError(400, 'One or more selected products are unavailable.');
@@ -86,6 +90,7 @@ router.post('/', async (req, res, next) => {
       const bill = {
         _id: randomUUID(),
         invoiceNo,
+        billingMode,
         customerName: String(req.body.customerName || 'Walk-in customer').trim().slice(0, 100),
         customerPhone: String(req.body.customerPhone || '').trim().slice(0, 20),
         items,
@@ -99,7 +104,7 @@ router.post('/', async (req, res, next) => {
         updatedAt: now,
       };
       data.bills.push(bill);
-      const remainingStock = items.map(({ productId }) => ({ productId, stock: data.products.find((p) => p._id === productId).stock }));
+      const remainingStock = items.filter(item => item.productId).map(({ productId }) => ({ productId, stock: data.products.find((p) => p._id === productId).stock }));
       return { bill, remainingStock };
     });
     return res.status(201).json(result);
@@ -107,3 +112,4 @@ router.post('/', async (req, res, next) => {
 });
 
 export default router;
+
