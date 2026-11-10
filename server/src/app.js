@@ -4,6 +4,7 @@ import cors from 'cors';
 import jwt from 'jsonwebtoken';
 import { timingSafeEqual } from 'node:crypto';
 import { loadData } from './db.js';
+import { salesReport, istDate } from './lib/salesReport.js';
 import productsRouter from './routes/products.js';
 import billsRouter from './routes/bills.js';
 import dashboardRouter from './routes/dashboard.js';
@@ -52,6 +53,26 @@ app.post('/api/auth/login', (req, res) => {
     return res.status(401).json({ message: 'Username or password is incorrect.' });
   }
   return res.json({ token: jwt.sign({ sub: expectedUser }, secret, { expiresIn: '12h' }) });
+});
+// Read-only daily GST report for the scheduled morning notification. Protected by REPORT_TOKEN, not the admin login.
+app.get('/api/reports/daily', async (req, res, next) => {
+  try {
+    const expected = process.env.REPORT_TOKEN || '';
+    const given = String(req.query.token || '');
+    const left = Buffer.from(given); const right = Buffer.from(expected);
+    if (expected.length < 24 || left.length !== right.length || !timingSafeEqual(left, right)) {
+      return res.status(401).json({ message: 'Invalid report token.' });
+    }
+    const yesterday = istDate(Date.now() - 24 * 60 * 60 * 1000);
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date || '')) ? String(req.query.date) : yesterday;
+    const { bills } = await loadData();
+    const report = salesReport(bills.filter((b) => b.status !== 'Cancelled'), { mode: 'day', period: date, limit: 1 });
+    const { summary } = report;
+    const round = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+    const taxable = round(summary.subtotal - summary.discount);
+    const cgst = round(summary.tax / 2);
+    res.json({ date, bills: summary.billCount, items: summary.items, taxable, discount: summary.discount, gst: summary.tax, cgst, sgst: round(summary.tax - cgst), totalSales: summary.sales, byPaymentMethod: report.paymentGroups || undefined });
+  } catch (error) { next(error); }
 });
 app.use('/api', (req, res, next) => {
   if (req.path === '/health' || req.path === '/auth/login') return next();
