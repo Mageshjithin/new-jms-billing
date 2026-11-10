@@ -5,6 +5,7 @@ import jwt from 'jsonwebtoken';
 import { timingSafeEqual } from 'node:crypto';
 import { loadData } from './db.js';
 import { salesReport, istDate } from './lib/salesReport.js';
+import { buildGstWorkbook, monthToDate, daysInMonth } from './lib/gstExcel.js';
 import productsRouter from './routes/products.js';
 import billsRouter from './routes/bills.js';
 import dashboardRouter from './routes/dashboard.js';
@@ -54,24 +55,44 @@ app.post('/api/auth/login', (req, res) => {
   }
   return res.json({ token: jwt.sign({ sub: expectedUser }, secret, { expiresIn: '12h' }) });
 });
-// Read-only daily GST report for the scheduled morning notification. Protected by REPORT_TOKEN, not the admin login.
+// Read-only GST reports for the scheduled morning notification. Protected by REPORT_TOKEN, not the admin login.
+const reportTokenOk = (req) => {
+  const expected = process.env.REPORT_TOKEN || '';
+  const left = Buffer.from(String(req.query.token || '')); const right = Buffer.from(expected);
+  return expected.length >= 24 && left.length === right.length && timingSafeEqual(left, right);
+};
+const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 app.get('/api/reports/daily', async (req, res, next) => {
   try {
-    const expected = process.env.REPORT_TOKEN || '';
-    const given = String(req.query.token || '');
-    const left = Buffer.from(given); const right = Buffer.from(expected);
-    if (expected.length < 24 || left.length !== right.length || !timingSafeEqual(left, right)) {
-      return res.status(401).json({ message: 'Invalid report token.' });
-    }
+    if (!reportTokenOk(req)) return res.status(401).json({ message: 'Invalid report token.' });
     const yesterday = istDate(Date.now() - 24 * 60 * 60 * 1000);
     const date = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date || '')) ? String(req.query.date) : yesterday;
     const { bills } = await loadData();
     const report = salesReport(bills.filter((b) => b.status !== 'Cancelled'), { mode: 'day', period: date, limit: 1 });
     const { summary } = report;
-    const round = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
-    const taxable = round(summary.subtotal - summary.discount);
-    const cgst = round(summary.tax / 2);
-    res.json({ date, bills: summary.billCount, items: summary.items, taxable, discount: summary.discount, gst: summary.tax, cgst, sgst: round(summary.tax - cgst), totalSales: summary.sales, byPaymentMethod: report.paymentGroups || undefined });
+    const cgst = round2(summary.tax / 2);
+    const month = date.slice(0, 7);
+    const isMonthEnd = daysInMonth(month).at(-1) === date;
+    res.json({
+      date, bills: summary.billCount, items: summary.items, taxable: round2(summary.subtotal - summary.discount), discount: summary.discount,
+      gst: summary.tax, cgst, sgst: round2(summary.tax - cgst), totalSales: summary.sales, byPaymentMethod: report.paymentGroups || undefined,
+      isMonthEnd, monthToDate: { month, ...monthToDate(bills, month, date) },
+    });
+  } catch (error) { next(error); }
+});
+// Excel workbook: one row per date for the month + a month-by-month summary. ?month=YYYY-MM (default: month of yesterday).
+app.get('/api/reports/gst.xlsx', async (req, res, next) => {
+  try {
+    if (!reportTokenOk(req)) return res.status(401).json({ message: 'Invalid report token.' });
+    const yesterday = istDate(Date.now() - 24 * 60 * 60 * 1000);
+    const month = /^\d{4}-(0[1-9]|1[0-2])$/.test(String(req.query.month || '')) ? String(req.query.month) : yesterday.slice(0, 7);
+    const lastDay = daysInMonth(month).at(-1);
+    const upToDate = month === istDate(Date.now()).slice(0, 7) ? istDate(Date.now()) : lastDay;
+    const { bills } = await loadData();
+    const buffer = await buildGstWorkbook(bills, month, upToDate);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="JMS-GST-${month}.xlsx"`);
+    res.send(Buffer.from(buffer));
   } catch (error) { next(error); }
 });
 app.use('/api', (req, res, next) => {
