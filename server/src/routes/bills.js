@@ -73,7 +73,11 @@ router.post('/', async (req, res, next) => {
         throw httpError(400, 'Discount or GST value is outside the allowed range.');
       }
       const tax = money((subtotal - discount) * gstPercent / 100);
-      const total = money(subtotal - discount + tax);
+      const exactTotal = money(subtotal - discount + tax);
+      // Round off to the nearest rupee by default (892.50 -> 893.00); the cashier can switch it off per bill.
+      const roundOffOn = req.body.roundOff !== false && req.body.roundOff !== 'false';
+      const total = roundOffOn ? Math.round(exactTotal) : exactTotal;
+      const roundOff = money(total - exactTotal);
       let payment;
       try { payment = calculatePayment(total, req.body.paymentMethod, req.body.amountReceived); }
       catch (error) { throw httpError(400, error.message); }
@@ -98,6 +102,7 @@ router.post('/', async (req, res, next) => {
         discount,
         gstPercent,
         tax,
+        roundOff,
         total,
         ...payment,
         createdAt: now,
