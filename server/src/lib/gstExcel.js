@@ -14,7 +14,7 @@ function emptyRow() {
 function add(row, bill) {
   row.bills += 1;
   row.items += (bill.items || []).reduce((n, item) => n + (Number(item.quantity) || 0), 0);
-  row.taxable += cents(bill.subtotal) - cents(bill.discount);
+  row.taxable += bill.taxableValue != null ? cents(bill.taxableValue) : cents(bill.subtotal) - cents(bill.discount);
   row.discount += cents(bill.discount);
   row.gst += cents(bill.tax);
   row.sales += cents(bill.total);

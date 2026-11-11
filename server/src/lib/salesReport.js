@@ -29,7 +29,7 @@ export function salesReport(bills, query = {}) {
   }).sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt) || String(b._id).localeCompare(String(a._id)));
   const groups = new Map();
   const paymentGroups = new Map();
-  const summary = { billCount: 0, items: 0, subtotal: 0, discount: 0, tax: 0, sales: 0 };
+  const summary = { billCount: 0, items: 0, subtotal: 0, discount: 0, taxable: 0, tax: 0, sales: 0 };
   for (const bill of matching) {
     const method = methodOf(bill);
     const paymentGroup = paymentGroups.get(method) || { paymentMethod: method, billCount: 0, sales: 0 };
@@ -38,12 +38,12 @@ export function salesReport(bills, query = {}) {
     paymentGroups.set(method, paymentGroup);
     const date = istDate(bill.createdAt);
     const key = mode === 'year' ? date.slice(0,7) : mode === 'all' ? date.slice(0,4) : date;
-    const group = groups.get(key) || { period: key || 'Unknown date', billCount: 0, items: 0, subtotal: 0, discount: 0, tax: 0, sales: 0 };
-    const values = {billCount: 1, items: (bill.items || []).reduce((n,item) => n + (Number(item.quantity)||0),0), subtotal:cents(bill.subtotal), discount:cents(bill.discount), tax:cents(bill.tax), sales:cents(bill.total)};
+    const group = groups.get(key) || { period: key || 'Unknown date', billCount: 0, items: 0, subtotal: 0, discount: 0, taxable: 0, tax: 0, sales: 0 };
+    const values = {billCount: 1, items: (bill.items || []).reduce((n,item) => n + (Number(item.quantity)||0),0), subtotal:cents(bill.subtotal), discount:cents(bill.discount), taxable:bill.taxableValue != null ? cents(bill.taxableValue) : cents(bill.subtotal)-cents(bill.discount), tax:cents(bill.tax), sales:cents(bill.total)};
     for (const [k,v] of Object.entries(values)) {summary[k] += v; group[k] += v;}
     groups.set(key,group);
   }
-  const amounts = row => {for (const key of ['subtotal','discount','tax','sales']) row[key] /= 100;return row;};
+  const amounts = row => {for (const key of ['subtotal','discount','taxable','tax','sales']) row[key] /= 100;return row;};
   const totalPages = Math.max(1,Math.ceil(matching.length / limit));
   const page = Math.min(requestedPage,totalPages);
   return {bills:matching.slice((page-1)*limit,page*limit), page, limit, total:matching.length,totalPages,summary:amounts(summary),groups:[...groups.values()].sort((a,b)=>b.period.localeCompare(a.period)).map(amounts),paymentGroups:[...paymentGroups.values()].map(row=>({...row,sales:row.sales/100})).sort((a,b)=>a.paymentMethod.localeCompare(b.paymentMethod)),timeZone:'Asia/Kolkata'};

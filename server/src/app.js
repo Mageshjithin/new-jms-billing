@@ -74,7 +74,7 @@ app.get('/api/reports/daily', async (req, res, next) => {
     const month = date.slice(0, 7);
     const isMonthEnd = daysInMonth(month).at(-1) === date;
     res.json({
-      date, bills: summary.billCount, items: summary.items, taxable: round2(summary.subtotal - summary.discount), discount: summary.discount,
+      date, bills: summary.billCount, items: summary.items, taxable: round2(summary.taxable), discount: summary.discount,
       gst: summary.tax, cgst, sgst: round2(summary.tax - cgst), totalSales: summary.sales, byPaymentMethod: report.paymentGroups || undefined,
       isMonthEnd, monthToDate: { month, ...monthToDate(bills, month, date) },
     });

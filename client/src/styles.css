@@ -84,3 +84,4 @@
 .receipt-style .tax-table td{font-size:11px}
 .receipt-style .tax-table th:not(:first-child),.receipt-style .tax-table td:not(:first-child){text-align:right}
 .receipt-style .thankyou{font-family:Arial,Helvetica,sans-serif;font-size:11px;font-weight:700;letter-spacing:.3px;color:#111;margin:12px 0 0}
+.receipt-style .incl-note{text-align:center;font-weight:700;font-size:11px;margin:8px 0 0}
